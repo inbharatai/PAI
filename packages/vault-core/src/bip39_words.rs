@@ -5,7 +5,7 @@
 //! Each word maps to an 11-bit index (0-2047) used for mnemonic seed encoding.
 //! This list MUST NOT be reordered or altered - it is the canonical BIP-39 list.
 
-pub const BIP39_ENGLISH: [&str; 2048] = [
+pub static BIP39_ENGLISH: [&str; 2048] = [
     "abandon",
     "ability",
     "able",

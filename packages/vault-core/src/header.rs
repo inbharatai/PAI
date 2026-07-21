@@ -96,8 +96,8 @@ impl VaultHeader {
             vault_id: vault_id.to_string(),
             kdf_params,
             salt: hex::encode(salt),
-            wrapped_master_key: hex::encode(&wrapped_master_key),
-            wrap_nonce: hex::encode(&wrap_nonce),
+            wrapped_master_key: hex::encode(wrapped_master_key),
+            wrap_nonce: hex::encode(wrap_nonce),
             header_hmac: String::new(), // computed below
             recovery_enabled: false,
             wrapped_master_key_recovery: None,
@@ -187,7 +187,7 @@ impl VaultHeader {
 
         let mut new_header = self.clone();
         new_header.salt = hex::encode(new_salt);
-        new_header.wrapped_master_key = hex::encode(&new_wrapped_key);
+        new_header.wrapped_master_key = hex::encode(new_wrapped_key);
         new_header.wrap_nonce = hex::encode(new_wrap_nonce);
         new_header.updated_at = chrono::Utc::now().to_rfc3339();
 
@@ -215,7 +215,7 @@ impl VaultHeader {
 
         let mut header = self.clone();
         header.recovery_enabled = true;
-        header.wrapped_master_key_recovery = Some(hex::encode(&wrapped_recovery));
+        header.wrapped_master_key_recovery = Some(hex::encode(wrapped_recovery));
         header.recovery_wrap_nonce = Some(hex::encode(recovery_nonce));
         header.recovery_salt = Some(hex::encode(recovery_salt));
         header.updated_at = chrono::Utc::now().to_rfc3339();
@@ -270,7 +270,7 @@ impl VaultHeader {
     /// Load a header from a file
     pub fn load_from_file(path: &Path) -> Result<VaultHeader, VaultError> {
         let content = std::fs::read_to_string(path)
-            .map_err(|e| VaultError::Io(e))?;
+            .map_err(VaultError::Io)?;
         serde_json::from_str(&content)
             .map_err(|e| VaultError::Serialization(e.to_string()))
     }
@@ -343,7 +343,7 @@ mod tests {
         let wrapped = hex::decode(&header.wrapped_master_key).unwrap();
         let mut modified = wrapped.clone();
         modified[0] ^= 0x01; // Flip one byte
-        header.wrapped_master_key = hex::encode(&modified);
+        header.wrapped_master_key = hex::encode(modified);
 
         let result = header.unlock_with_password(b"test-password-12345");
         assert!(result.is_err());

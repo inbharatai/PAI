@@ -154,7 +154,7 @@ pub fn words_to_secret(words: &[String]) -> Result<[u8; RECOVERY_SECRET_LEN], Va
 
     // Verify checksum
     let mut hasher = Sha256::new();
-    hasher.update(&secret);
+    hasher.update(secret);
     let actual_checksum = hasher.finalize();
 
     // The first byte of the SHA-256 hash should match the checksum byte

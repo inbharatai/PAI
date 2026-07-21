@@ -12,7 +12,7 @@ use crate::crypto::*;
 use crate::error::VaultError;
 use crate::header::{VaultHeader, HEADER_A_FILE, HEADER_B_FILE};
 use crate::journal::Journal;
-use crate::record::{EncryptedRecord, Record, RecordType};
+use crate::record::{EncryptedRecord, Record};
 use crate::recovery::RecoveryPhrase;
 
 /// Minimum password length (directive §16: no short passwords)
@@ -327,9 +327,9 @@ impl Vault {
         // Create encrypted record
         let mut encrypted_record = EncryptedRecord {
             metadata: record.clone(),
-            encrypted_content: hex::encode(&encrypted_content),
-            nonce: hex::encode(&nonce),
-            associated_data: hex::encode(&aad),
+            encrypted_content: hex::encode(encrypted_content),
+            nonce: hex::encode(nonce),
+            associated_data: hex::encode(aad),
         };
 
         encrypted_record.metadata.content_hash = content_hash;
