@@ -1,0 +1,173 @@
+name: Desktop CI
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'apps/desktop/**'
+      - 'packages/**'
+      - '.github/workflows/desktop-ci.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'apps/desktop/**'
+      - 'packages/**'
+      - '.github/workflows/desktop-ci.yml'
+
+concurrency:
+  group: desktop-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mobile-protection:
+    name: Verify Mobile Untouched
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify no Android files changed
+        shell: bash
+        run: |
+          # Verify the golden baseline tag exists
+          if ! git tag -l mobile-golden-baseline-v1 | grep -q mobile-golden-baseline-v1; then
+            echo "FAIL: Golden tag 'mobile-golden-baseline-v1' not found"
+            exit 1
+          fi
+
+          # Check for changes in the protected path
+          DIFF=$(git diff mobile-golden-baseline-v1 HEAD -- android-app/UnoOneAgent/ || true)
+          if [ -n "$DIFF" ]; then
+            echo "FAIL: Changes detected in protected path 'android-app/UnoOneAgent/'"
+            echo ""
+            echo "Changed files:"
+            git diff --name-only mobile-golden-baseline-v1 HEAD -- android-app/UnoOneAgent/
+            echo ""
+            echo "The Android application must not be modified during desktop development."
+            exit 1
+          fi
+
+          echo "PASS: No changes in protected Android path"
+
+  frontend-build:
+    name: Frontend Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: apps/desktop/src/package-lock.json
+
+      - name: Install dependencies
+        working-directory: apps/desktop/src
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: apps/desktop/src
+        run: npm run build
+
+  rust-check:
+    name: Rust Backend (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: macos-latest
+            target: aarch64-apple-darwin
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            apps/desktop/src-tauri/target
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-${{ matrix.os }}-${{ hashFiles('apps/desktop/src-tauri/Cargo.toml') }}
+          restore-keys: cargo-${{ matrix.os }}-
+
+      - name: cargo fmt
+        working-directory: apps/desktop/src-tauri
+        run: cargo fmt --check
+
+      - name: cargo check
+        working-directory: apps/desktop/src-tauri
+        run: cargo check
+
+      - name: cargo test
+        working-directory: apps/desktop/src-tauri
+        run: cargo test
+
+      - name: cargo clippy
+        working-directory: apps/desktop/src-tauri
+        run: cargo clippy -- -D warnings
+
+  secret-scan:
+    name: Secret Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for hardcoded secrets
+        shell: bash
+        run: |
+          FOUND=0
+          # Check for common secret patterns
+          for PATTERN in "password\s*=\s*['\"][^'\"]{8,}['\"]" "api_key\s*=\s*['\"][^'\"]+['\"]" "secret\s*=\s*['\"][^'\"]+['\"]" "token\s*=\s*['\"][^'\"]+['\"]"; do
+            if grep -rPn "$PATTERN" apps/desktop/src-tauri/src/ apps/desktop/src/src/ --include="*.rs" --include="*.ts" --include="*.tsx" 2>/dev/null; then
+              FOUND=1
+            fi
+          done
+          if [ "$FOUND" = "1" ]; then
+            echo "FAIL: Potential hardcoded secrets found"
+            exit 1
+          fi
+          echo "PASS: No hardcoded secrets detected"
+
+  artifact-scan:
+    name: Artifact Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for binary artifacts in git
+        shell: bash
+        run: |
+          FOUND=0
+          # Check for model binaries, DLLs, executables that should not be in git
+          for EXT in ".gguf" ".dll" ".so" ".dylib" ".apk" ".aab"; do
+            if git ls-files -- "*.${EXT#*.}" 2>/dev/null | head -1 | grep -q "."; then
+              echo "FAIL: Found ${EXT} files in git"
+              git ls-files -- "*${EXT}"
+              FOUND=1
+            fi
+          done
+          # Check for target/ directory (build artifacts)
+          if git ls-files -- "apps/desktop/src-tauri/target/" 2>/dev/null | head -1 | grep -q "."; then
+            echo "FAIL: Found target/ directory in git"
+            FOUND=1
+          fi
+          # Check for Cargo.lock in VCS (should be in .gitignore for apps)
+          if git ls-files -- "apps/desktop/src-tauri/Cargo.lock" 2>/dev/null | head -1 | grep -q "."; then
+            echo "WARN: Cargo.lock is tracked — should be in .gitignore for apps"
+          fi
+          if [ "$FOUND" = "1" ]; then
+            exit 1
+          fi
+          echo "PASS: No binary artifacts in git"

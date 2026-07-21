@@ -1,0 +1,6 @@
+# UnoOne Mobile Golden Baseline Hash Manifest
+# Tag: mobile-golden-baseline-v1
+# Commit: ae35ec7
+# Generated: 2026-07-21T13:02:17Z
+# DO NOT MODIFY: Any change to these files during desktop development is unauthorized
+
