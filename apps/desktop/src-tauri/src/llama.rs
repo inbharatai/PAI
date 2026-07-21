@@ -61,6 +61,7 @@ pub enum ModelStatus {
 
 /// Inference request
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct InferenceRequest {
     pub prompt: String,
     pub system_prompt: Option<String>,
@@ -72,6 +73,7 @@ pub struct InferenceRequest {
 
 /// Conversation turn
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct ConversationTurn {
     pub role: String,  // "user" or "assistant"
     pub content: String,
@@ -79,6 +81,7 @@ pub struct ConversationTurn {
 
 /// Inference response
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct InferenceResponse {
     pub text: String,
     pub tokens_generated: u32,
@@ -99,6 +102,7 @@ pub struct ModelInfo {
 }
 
 /// Model manager state
+#[allow(dead_code)]
 pub struct ModelManager {
     config: Mutex<Option<ModelConfig>>,
     status: Mutex<ModelStatus>,
@@ -140,6 +144,7 @@ impl ModelManager {
         backends
     }
 
+    #[allow(dead_code)]
     fn check_cuda(&self) -> bool {
         // Check for CUDA by trying to find nvcuda.dll (Windows) or libcuda.so (Linux)
         if cfg!(target_os = "windows") {
@@ -153,11 +158,13 @@ impl ModelManager {
         }
     }
 
+    #[allow(dead_code)]
     fn check_metal(&self) -> bool {
         // Metal is always available on macOS
         cfg!(target_os = "macos")
     }
 
+    #[allow(dead_code)]
     fn check_vulkan(&self) -> bool {
         // Check for Vulkan runtime
         if cfg!(target_os = "windows") {
@@ -333,6 +340,7 @@ impl ModelManager {
     /// Get the llama.cpp binary path for the current platform
     /// Uses manifest-informed directory structure (uppercase CUDA/CPU/VULKAN)
     /// Prefers CUDA > Vulkan > CPU based on detected hardware
+    #[allow(dead_code)]
     fn get_llama_binary_path(&self, vault_root: &str) -> PathBuf {
         let base_dir = if cfg!(target_os = "windows") {
             PathBuf::from(vault_root).join("RUNTIMES").join("WINDOWS")
@@ -387,6 +395,7 @@ impl ModelManager {
     }
 
     /// Start llama-server for inference
+    #[allow(dead_code)]
     pub fn start_server(&self, config: &ModelConfig, vault_root: &str) -> Result<u16, String> {
         let llama_path = self.get_llama_binary_path(vault_root);
 
@@ -460,6 +469,7 @@ impl ModelManager {
     }
 
     /// Stop the llama-server process
+    #[allow(dead_code)]
     pub fn stop_server(&self) -> Result<(), String> {
         let mut process = self.llama_process.lock().unwrap();
         if let Some(ref mut child) = *process {
@@ -472,16 +482,19 @@ impl ModelManager {
     }
 
     /// Get current model status
+    #[allow(dead_code)]
     pub fn get_status(&self) -> ModelStatus {
         self.status.lock().unwrap().clone()
     }
 
     /// Get current backend
+    #[allow(dead_code)]
     pub fn get_backend(&self) -> AccelerationBackend {
         self.backend.lock().unwrap().clone()
     }
 
     /// Set backend
+    #[allow(dead_code)]
     pub fn set_backend(&self, backend: AccelerationBackend) {
         *self.backend.lock().unwrap() = backend;
     }

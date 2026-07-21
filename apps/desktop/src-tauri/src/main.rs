@@ -235,6 +235,7 @@ fn validate_vault_root(vault_root: &str) -> Result<(String, String), String> {
 }
 
 #[tauri::command]
+#[allow(unexpected_cfgs)]
 fn detect_vault() -> Result<VaultInfo, String> {
     // Scan removable drives for a valid UnoOne vault
     // Validates via manifest.json + VERSION + vault.id — not hardcoded paths
@@ -338,7 +339,7 @@ fn unlock_vault(password: String, vault_root: String, state: tauri::State<'_, Mu
 }
 
 #[tauri::command]
-fn setup_vault(password: String, profile_name: Option<String>, vault_root: String) -> Result<VaultSetupResult, String> {
+fn setup_vault(password: String, _profile_name: Option<String>, vault_root: String) -> Result<VaultSetupResult, String> {
     if password.len() < 8 {
         return Ok(VaultSetupResult {
             success: false,
@@ -533,7 +534,7 @@ fn get_vault_status(state: tauri::State<'_, Mutex<VaultState>>) -> Result<VaultS
     // Get total disk space for the drive
     let total_space_gb = std::fs::metadata(vault_path)
         .ok()
-        .and_then(|m| {
+        .and_then(|_m| {
             // Try to get filesystem stats
             std::fs::metadata(vault_path).ok()
         })

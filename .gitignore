@@ -82,6 +82,9 @@ target/
 Cargo.lock
 !packages/vault-core/Cargo.lock
 
+# --- Tauri ---
+**/gen/
+
 # --- Misc ---
 *.bak
 *.tmp

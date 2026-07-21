@@ -76,6 +76,7 @@ pub struct BrowserActionResult {
 
 /// Page information
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct PageInfo {
     pub url: String,
     pub title: String,
