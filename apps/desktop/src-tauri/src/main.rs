@@ -125,28 +125,145 @@ struct VaultStatus {
     total_space_gb: f64,
 }
 
-#[tauri::command]
-fn detect_vault() -> Result<VaultInfo, String> {
-    // Detect UnoOne Pocket USB drive
-    // Check for D:\UNOONE\VAULT\identity\vault.id (Windows)
-    // Check for /Volumes/PAI/UNOONE/VAULT/identity/vault.id (macOS)
-    let vault_paths = if cfg!(target_os = "windows") {
-        vec!["D:\\UNOONE", "E:\\UNOONE", "F:\\UNOONE"]
+/// Scan removable drives for a valid UnoOne vault.
+/// Validates via manifest.json + VERSION + vault.id — not hardcoded drive letters.
+fn scan_removable_drives() -> Vec<String> {
+    let mut drives = Vec::new();
+
+    if cfg!(target_os = "windows") {
+        // Enumerate all logical drives and filter to removable ones
+        // Use WMI to find removable drives, then check each for UNOONE
+        if let Ok(output) = std::process::Command::new("powershell")
+            .args([
+                "-NoProfile", "-Command",
+                "Get-CimInstance Win32_LogicalDisk | Where-Object { $_.DriveType -eq 2 } | Select-Object -ExpandProperty DeviceID",
+            ])
+            .output()
+        {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                for line in stdout.lines() {
+                    let drive = line.trim().to_string();
+                    if !drive.is_empty() && drive.len() == 2 && drive.ends_with(':') {
+                        drives.push(format!("{}\\", drive));
+                    }
+                }
+            }
+        }
+
+        // Fallback: check common drive letters if WMI fails
+        if drives.is_empty() {
+            for letter in "DEFGHIJKLMNOP".chars() {
+                let path = format!("{}:\\", letter);
+                if std::path::Path::new(&path).exists() {
+                    // Check if it looks like a removable drive
+                    let unoone_path = std::path::Path::new(&path).join("UNOONE");
+                    if unoone_path.exists() {
+                        drives.push(path);
+                    }
+                }
+            }
+        }
     } else if cfg!(target_os = "macos") {
-        vec!["/Volumes/PAI/UNOONE", "/Volumes/UNOONE"]
+        // macOS: scan /Volumes/ for UNOONE directory
+        if let Ok(entries) = std::fs::read_dir("/Volumes") {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let unoone_path = path.join("UNOONE");
+                if unoone_path.exists() {
+                    drives.push(path.to_string_lossy().to_string());
+                }
+            }
+        }
     } else {
-        vec!["/mnt/usb/UNOONE", "/media/usb/UNOONE"]
+        // Linux: scan common mount points
+        for base in &["/mnt", "/media"] {
+            if let Ok(entries) = std::fs::read_dir(base) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    let unoone_path = path.join("UNOONE");
+                    if unoone_path.exists() {
+                        drives.push(path.to_string_lossy().to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    drives
+}
+
+/// Validate that a directory is a legitimate UnoOne vault by checking
+/// manifest.json, VERSION, and vault.id — not just the directory name.
+fn validate_vault_root(vault_root: &str) -> Result<(String, String), String> {
+    let root = std::path::Path::new(vault_root);
+    let unoone_root = if root.join("UNOONE").exists() {
+        root.join("UNOONE")
+    } else if root.join("manifest.json").exists() {
+        root.to_path_buf()
+    } else {
+        return Err("No UNOONE directory or manifest.json found".to_string());
     };
 
-    for path in vault_paths {
-        let vault_id_path = std::path::Path::new(path).join("VAULT").join("identity").join("vault.id");
-        if vault_id_path.exists() {
-            let vault_id = std::fs::read_to_string(&vault_id_path)
-                .map_err(|e| format!("Failed to read vault ID: {}", e))?;
+    // Check manifest.json exists and is valid JSON
+    let manifest_path = unoone_root.join("manifest.json");
+    if !manifest_path.exists() {
+        return Err("manifest.json not found — not a valid UnoOne vault".to_string());
+    }
+    let manifest_content = std::fs::read_to_string(&manifest_path)
+        .map_err(|e| format!("Failed to read manifest.json: {}", e))?;
+    let _manifest: serde_json::Value = serde_json::from_str(&manifest_content)
+        .map_err(|e| format!("manifest.json is not valid JSON: {}", e))?;
+
+    // Check VERSION file exists
+    let version_path = unoone_root.join("VERSION");
+    if !version_path.exists() {
+        return Err("VERSION file not found — not a valid UnoOne vault".to_string());
+    }
+
+    // Check vault.id exists
+    let vault_id_path = unoone_root.join("VAULT").join("identity").join("vault.id");
+    if !vault_id_path.exists() {
+        return Err("vault.id not found — vault not initialized".to_string());
+    }
+    let vault_id = std::fs::read_to_string(&vault_id_path)
+        .map_err(|e| format!("Failed to read vault ID: {}", e))?
+        .trim().to_string();
+
+    Ok((unoone_root.to_string_lossy().to_string(), vault_id))
+}
+
+#[tauri::command]
+fn detect_vault() -> Result<VaultInfo, String> {
+    // Scan removable drives for a valid UnoOne vault
+    // Validates via manifest.json + VERSION + vault.id — not hardcoded paths
+    let drives = scan_removable_drives();
+
+    for drive_root in drives {
+        if let Ok((vault_root, vault_id)) = validate_vault_root(&drive_root) {
             return Ok(VaultInfo {
                 detected: true,
-                vault_root: path.to_string(),
-                vault_id: vault_id.trim().to_string(),
+                vault_root,
+                vault_id,
+            });
+        }
+    }
+
+    // Also check non-removable paths (for development / C: drive)
+    let fallback_paths = if cfg!(target_os = "windows") {
+        vec!["C:\\UNOONE"]
+    } else if cfg!(target_os = "macos") {
+        vec!["/tmp/UNOONE"]
+    } else {
+        vec!["/tmp/UNOONE"]
+    };
+
+    for path in fallback_paths {
+        if let Ok((vault_root, vault_id)) = validate_vault_root(path) {
+            return Ok(VaultInfo {
+                detected: true,
+                vault_root,
+                vault_id,
             });
         }
     }
@@ -229,12 +346,15 @@ fn setup_vault(password: String, profile_name: Option<String>, vault_root: Strin
         });
     }
 
-    // Create the vault directory structure
-    let vault_dirs = ["VAULT/identity", "VAULT/memory", "VAULT/chats", "VAULT/recordings/audio",
-                      "VAULT/recordings/transcripts", "VAULT/documents", "VAULT/settings",
-                      "VAULT/audit", "VAULT/indexes/journal",
-                      "MODELS/gemma4-12b-q4-gguf", "MODELS/gemma4-e2b",
-                      "RUNTIMES/windows", "RUNTIMES/macos"];
+    // Create the vault directory structure (matches manifest.json v1 spec)
+    let vault_dirs = ["APPS/WINDOWS", "APPS/MACOS",
+                      "RUNTIMES/WINDOWS/CUDA", "RUNTIMES/WINDOWS/CPU", "RUNTIMES/WINDOWS/VULKAN",
+                      "RUNTIMES/MACOS/METAL",
+                      "MODELS/MOBILE", "MODELS/DESKTOP/Gemma-12B",
+                      "VAULT/header", "VAULT/records", "VAULT/indexes",
+                      "VAULT/journal", "VAULT/transactions", "VAULT/attachments",
+                      "VAULT/recovery",
+                      "CONFIG", "RECOVERY", "UPDATES", "LOGS"];
 
     for dir in &vault_dirs {
         let path = std::path::Path::new(&vault_root).join(dir);
@@ -380,15 +500,13 @@ fn detect_usb_speed() -> String {
             }
         }
 
-        // Fallback: check if UNOONE drive exists
-        for drive in &["D:\\", "E:\\", "F:\\"] {
-            let vault_id = std::path::Path::new(drive)
-                .join("UNOONE")
-                .join("VAULT")
-                .join("identity")
-                .join("vault.id");
-            if vault_id.exists() {
-                return "USB 3.0+".to_string(); // Assume USB 3.0+ if vault detected
+        // Fallback: check if a validated UNOONE vault exists on any drive
+        let drives = scan_removable_drives();
+        for drive in &drives {
+            if let Ok((vault_root, _)) = validate_vault_root(drive) {
+                // Found a valid vault — report as USB 3.0+
+                let _ = vault_root; // used for validation only
+                return "USB 3.0+".to_string();
             }
         }
     }

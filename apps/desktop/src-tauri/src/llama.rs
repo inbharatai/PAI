@@ -171,76 +171,156 @@ impl ModelManager {
     }
 
     /// Find GGUF model files in the MODELS directory
+    /// Uses manifest-based discovery: reads manifest.json for model metadata,
+    /// then scans MODELS/DESKTOP/ and MODELS/MOBILE/ directories
     pub fn find_models(&self, vault_root: &str) -> Vec<ModelInfo> {
         let mut models = Vec::new();
 
-        // Gemma 4 12B Q4
-        let model_dir_12b = PathBuf::from(vault_root)
-            .join("MODELS")
-            .join("gemma4-12b-q4-gguf");
+        // Try manifest-based discovery first
+        let manifest_path = PathBuf::from(vault_root).join("manifest.json");
+        if let Ok(manifest_content) = std::fs::read_to_string(&manifest_path) {
+            if let Ok(manifest) = serde_json::from_str::<serde_json::Value>(&manifest_content) {
+                // Read desktop models from manifest
+                if let Some(desktop) = manifest.get("models").and_then(|m| m.get("desktop")) {
+                    if let Some(obj) = desktop.as_object() {
+                        for (_key, model) in obj {
+                            let model_path = model.get("path")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("");
+                            let full_path = PathBuf::from(vault_root).join(model_path);
 
-        if model_dir_12b.exists() {
-            if let Ok(entries) = std::fs::read_dir(&model_dir_12b) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if let Some(ext) = path.extension() {
-                        if ext == "gguf" || ext == "GGUF" {
-                            let file_size = std::fs::metadata(&path)
-                                .map(|m| m.len() as f64 / (1024.0 * 1024.0 * 1024.0))
-                                .unwrap_or(0.0);
+                            if full_path.exists() {
+                                let name = model.get("name")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("Unknown Model")
+                                    .to_string();
+                                let file_size = std::fs::metadata(&full_path)
+                                    .map(|m| m.len() as f64 / (1024.0 * 1024.0 * 1024.0))
+                                    .unwrap_or(0.0);
 
-                            models.push(ModelInfo {
-                                name: "Gemma 4 12B Q4_K_M".to_string(),
-                                model_type: "gemma-4-12b".to_string(),
-                                quantization: "Q4_K_M".to_string(),
-                                file_size_gb: file_size,
-                                context_length: 8192,
-                                available: true,
-                                path: path.to_string_lossy().to_string(),
-                            });
+                                models.push(ModelInfo {
+                                    name,
+                                    model_type: model.get("architecture")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("unknown")
+                                        .to_string(),
+                                    quantization: model.get("quantisation")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("unknown")
+                                        .to_string(),
+                                    file_size_gb: file_size,
+                                    context_length: 8192,
+                                    available: true,
+                                    path: full_path.to_string_lossy().to_string(),
+                                });
+                            }
+                        }
+                    }
+                }
+
+                // Read mobile models from manifest
+                if let Some(mobile) = manifest.get("models").and_then(|m| m.get("mobile")) {
+                    if let Some(obj) = mobile.as_object() {
+                        for (_key, model) in obj {
+                            let model_path = model.get("path")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("");
+                            let full_path = PathBuf::from(vault_root).join(model_path);
+
+                            if full_path.exists() {
+                                let file_size = std::fs::metadata(&full_path)
+                                    .map(|m| m.len() as f64 / (1024.0 * 1024.0 * 1024.0))
+                                    .unwrap_or(0.0);
+
+                                models.push(ModelInfo {
+                                    name: model.get("name")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("Unknown Mobile Model")
+                                        .to_string(),
+                                    model_type: model.get("architecture")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("unknown")
+                                        .to_string(),
+                                    quantization: model.get("quantisation")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("unknown")
+                                        .to_string(),
+                                    file_size_gb: file_size,
+                                    context_length: 4096,
+                                    available: true,
+                                    path: full_path.to_string_lossy().to_string(),
+                                });
+                            }
                         }
                     }
                 }
             }
         }
 
-        // Gemma 4 E2B (mobile model, also usable on desktop)
-        let model_dir_e2b = PathBuf::from(vault_root)
-            .join("MODELS")
-            .join("gemma4-e2b");
+        // Fallback: scan directories directly if manifest parsing fails
+        if models.is_empty() {
+            // Desktop models (Gemma 12B)
+            let desktop_dir = PathBuf::from(vault_root)
+                .join("MODELS").join("DESKTOP").join("Gemma-12B");
+            if desktop_dir.exists() {
+                if let Ok(entries) = std::fs::read_dir(&desktop_dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                            if name.ends_with(".gguf") && !name.contains("mmproj") {
+                                let file_size = std::fs::metadata(&path)
+                                    .map(|m| m.len() as f64 / (1024.0 * 1024.0 * 1024.0))
+                                    .unwrap_or(0.0);
+                                models.push(ModelInfo {
+                                    name: "Gemma 4 12B Q4_K_M".to_string(),
+                                    model_type: "gemma-4-12b".to_string(),
+                                    quantization: "Q4_K_M".to_string(),
+                                    file_size_gb: file_size,
+                                    context_length: 8192,
+                                    available: true,
+                                    path: path.to_string_lossy().to_string(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
 
-        if model_dir_e2b.exists() {
-            if let Ok(entries) = std::fs::read_dir(&model_dir_e2b) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if let Some(ext) = path.extension() {
-                        if ext == "gguf" || ext == "GGUF" {
-                            let file_size = std::fs::metadata(&path)
-                                .map(|m| m.len() as f64 / (1024.0 * 1024.0 * 1024.0))
-                                .unwrap_or(0.0);
-
-                            models.push(ModelInfo {
-                                name: "Gemma 4 E2B".to_string(),
-                                model_type: "gemma-4-e2b".to_string(),
-                                quantization: "F16".to_string(),
-                                file_size_gb: file_size,
-                                context_length: 4096,
-                                available: true,
-                                path: path.to_string_lossy().to_string(),
-                            });
+            // Mobile models (E2B)
+            let mobile_dir = PathBuf::from(vault_root)
+                .join("MODELS").join("MOBILE");
+            if mobile_dir.exists() {
+                if let Ok(entries) = std::fs::read_dir(&mobile_dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                            if name.ends_with(".gguf") {
+                                let file_size = std::fs::metadata(&path)
+                                    .map(|m| m.len() as f64 / (1024.0 * 1024.0 * 1024.0))
+                                    .unwrap_or(0.0);
+                                models.push(ModelInfo {
+                                    name: "Gemma 4 E2B Q4_K_M".to_string(),
+                                    model_type: "gemma-4-e2b".to_string(),
+                                    quantization: "Q4_K_M".to_string(),
+                                    file_size_gb: file_size,
+                                    context_length: 4096,
+                                    available: true,
+                                    path: path.to_string_lossy().to_string(),
+                                });
+                            }
                         }
                     }
                 }
             }
         }
 
-        // If no models found in USB, mark as not available
+        // If no models found, mark as not available
         if models.is_empty() {
             models.push(ModelInfo {
                 name: "Gemma 4 12B Q4_K_M".to_string(),
                 model_type: "gemma-4-12b".to_string(),
                 quantization: "Q4_K_M".to_string(),
-                file_size_gb: 7.4,
+                file_size_gb: 7.14,
                 context_length: 8192,
                 available: false,
                 path: String::new(),
@@ -251,14 +331,15 @@ impl ModelManager {
     }
 
     /// Get the llama.cpp binary path for the current platform
-    /// Prefers CUDA build if available, falls back to CPU
+    /// Uses manifest-informed directory structure (uppercase CUDA/CPU/VULKAN)
+    /// Prefers CUDA > Vulkan > CPU based on detected hardware
     fn get_llama_binary_path(&self, vault_root: &str) -> PathBuf {
         let base_dir = if cfg!(target_os = "windows") {
-            PathBuf::from(vault_root).join("RUNTIMES").join("windows")
+            PathBuf::from(vault_root).join("RUNTIMES").join("WINDOWS")
         } else if cfg!(target_os = "macos") {
-            PathBuf::from(vault_root).join("RUNTIMES").join("macos")
+            PathBuf::from(vault_root).join("RUNTIMES").join("MACOS")
         } else {
-            PathBuf::from(vault_root).join("RUNTIMES").join("linux")
+            PathBuf::from(vault_root).join("RUNTIMES").join("LINUX")
         };
 
         let binary_name = if cfg!(target_os = "windows") {
@@ -267,16 +348,38 @@ impl ModelManager {
             "llama-server"
         };
 
-        // Prefer CUDA build
-        let cuda_path = base_dir.join("llama-cuda").join(binary_name);
-        if cuda_path.exists() {
-            return cuda_path;
+        // Order: CUDA > Vulkan > CPU (matches hardware acceleration priority)
+        let backends = if cfg!(target_os = "macos") {
+            vec!["METAL"]
+        } else {
+            vec!["CUDA", "VULKAN", "CPU"]
+        };
+
+        for backend in &backends {
+            let path = base_dir.join(backend).join(binary_name);
+            if path.exists() {
+                // Verify the implementation DLL exists (9KB launcher is useless without it)
+                let impl_path = base_dir.join(backend).join("llama-server-impl.dll");
+                let impl_path_mac = base_dir.join(backend).join("llama-server-impl.dylib");
+                if impl_path.exists() || impl_path_mac.exists() || !cfg!(target_os = "windows") {
+                    return path;
+                }
+                // On Windows, if the impl DLL doesn't exist, skip this backend
+            }
         }
 
-        // Fall back to CPU build
-        let cpu_path = base_dir.join("llama-cpu").join(binary_name);
-        if cpu_path.exists() {
-            return cpu_path;
+        // Fallback: check lowercase paths for backwards compatibility
+        let backends_compat = if cfg!(target_os = "macos") {
+            vec!["metal"]
+        } else {
+            vec!["cuda", "vulkan", "cpu"]
+        };
+
+        for backend in &backends_compat {
+            let path = base_dir.join(backend).join(binary_name);
+            if path.exists() {
+                return path;
+            }
         }
 
         // Last resort: direct in runtime dir
