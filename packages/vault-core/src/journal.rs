@@ -4,7 +4,7 @@
 // This ensures that a crash or unsafe USB removal never corrupts data.
 
 use serde::{Deserialize, Serialize};
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
@@ -237,7 +237,8 @@ impl Journal {
     fn compute_entry_hmac(&self, mut entry: JournalEntry) -> JournalEntry {
         // Clear HMAC before computing
         entry.entry_hmac = String::new();
-        let json = serde_json::to_string(&entry).unwrap_or_default();
+        let json = serde_json::to_string(&entry)
+            .expect("Journal entry serialization must not fail — all fields are serializable");
         // Use a fixed key for journal HMAC (not the vault master key)
         // This allows crash recovery without unlocking the vault
         let hmac = crate::crypto::hmac_sha256(b"unoone-vault-journal", json.as_bytes());

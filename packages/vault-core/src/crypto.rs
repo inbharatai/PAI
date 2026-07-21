@@ -11,7 +11,7 @@
 
 use argon2::{Algorithm, Argon2, Params, Version};
 use chacha20poly1305::{
-    aead::{Aead, KeyInit, Tag},
+    aead::{Aead, KeyInit},
     XChaCha20Poly1305, XNonce,
 };
 use hkdf::Hkdf;
@@ -86,7 +86,7 @@ pub fn encrypt(
 
     let xnonce = XNonce::from_slice(nonce);
     cipher
-        .encrypt_in_place(xnonce, aad, plaintext)
+        .encrypt(xnonce, (plaintext, aad))
         .map_err(|e| VaultError::EncryptionFailed(format!("Encryption failed: {}", e)))
 }
 
@@ -105,7 +105,7 @@ pub fn decrypt(
 
     let xnonce = XNonce::from_slice(nonce);
     cipher
-        .decrypt_in_place(xnonce, aad, ciphertext)
+        .decrypt(xnonce, (ciphertext, aad))
         .map_err(|e| VaultError::DecryptionFailed(format!("Decryption failed (wrong password or tampered data): {}", e)))
 }
 

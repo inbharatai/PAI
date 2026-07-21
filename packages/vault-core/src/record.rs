@@ -3,7 +3,7 @@
 // cross-platform continuity between Windows, macOS, and Android.
 
 use serde::{Deserialize, Serialize};
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use uuid::Uuid;
 
 /// Schema version — increment when the record format changes

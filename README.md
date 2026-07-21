@@ -27,9 +27,8 @@ UnoOne Mobile (Android)          UnoOne Power (Desktop)
 |-----------|--------|
 | Mobile app (Android) | **FROZEN** at tag `mobile-golden-baseline-v1` — no changes authorized |
 | Desktop frontend (React) | BUILDS — Vite build passes, real Tauri API calls, no mock data |
-| Desktop backend (Rust) | **BLOCKED** — WDAC/AppLocker policy prevents build scripts on this machine; CI_CONFIGURED (no workflow results yet) |
-| USB vault (exFAT) | Formatted, directory structure established, 12B model verified |
-| Vault encryption | **NOT IMPLEMENTED** — Argon2id + XChaCha20-Poly1305 pending |
+| Desktop backend (Rust) | CI_CONFIGURED — WDAC blocks local build; Rust CI configured (fmt/check/test/clippy on Windows+macOS) |
+| Vault encryption (`packages/vault-core`) | IMPLEMENTED, CI_PENDING — Argon2id + XChaCha20-Poly1305 + HKDF-SHA-256 + BIP-39 recovery + write-ahead journal |
 | Model inference | **NOT PROVEN from USB** — WDAC blocks llama-server.exe on this machine; verified via Ollama proxy |
 | Recording | **NOT IMPLEMENTED** — state machine only, no audio capture |
 | Browser | **NOT IMPLEMENTED** — returns "not available" |
@@ -119,14 +118,18 @@ The desktop app discovers the USB drive by:
 
 ### Encryption
 
-- **KDF**: Argon2id (256MB memory, 3 iterations, parallelism 4) — **NOT YET IMPLEMENTED**
+- **KDF**: Argon2id (256 MiB memory, 3 iterations, parallelism 4) — ✅ implemented in `packages/vault-core`
 - **Cipher**: XChaCha20-Poly1305 (desktop) / AES-256-GCM (Android hardware-accelerated)
-- **Key isolation**: Master key → HMAC-SHA256 → per-domain keys
-- **Journaling**: Write-ahead log (PENDING → COMMITTED / ROLLED_BACK)
+- **Key wrapping**: Password → Argon2id → KEK → wraps random vault master key (allows password changes without re-encryption)
+- **Key isolation**: Master key → HKDF-SHA-256 → per-domain keys (records, journal, indexes, etc.)
+- **Header**: Double-buffered (A/B slots), HMAC-SHA-256 authenticated, constant-time comparison
+- **Recovery**: 24-word BIP-39 mnemonic (NOT UUID fragments) with independent key wrapping
+- **Journaling**: Write-ahead log (PENDING → COMMITTED / ROLLED_BACK) for exFAT crash safety
 - **Deletion**: Tombstone records propagate across platforms
 - **Password-only login**: No username, no email, no cloud account
+- **Memory safety**: Master key zeroed on lock and drop; no passwords in files/logs
 
-> ⚠️ **Security warning**: `unlock_vault` and `setup_vault` are **blocked** until Argon2id + XChaCha20-Poly1305 encryption is implemented. They return `SECURITY_NOT_IMPLEMENTED` instead of accepting passwords. Do not store sensitive data until encryption is complete.
+> ⚠️ **CI verification pending**: vault-core compiles locally (frontend passes) but Rust CI has not yet verified `cargo check/test/clippy`. WDAC blocks local Rust builds. Do not store sensitive data until CI confirms all tests pass.
 
 ### Safety Pipeline
 
@@ -146,7 +149,8 @@ PAI/
 ├── android-app/UnoOneAgent/    # FROZEN — mobile golden baseline (tag: mobile-golden-baseline-v1)
 ├── packages/
 │   ├── core-contracts/           # Kotlin multiplatform contracts
-│   └── encrypted-vault/          # Argon2id + XChaCha20-Poly1305 vault engine
+│   ├── encrypted-vault/          # Kotlin Argon2id + XChaCha20-Poly1305 vault engine (Android)
+│   └── vault-core/               # Rust vault library (desktop + shared test vectors)
 ├── platform-adapters/
 │   └── android/                  # USB vault connector, recording engine
 ├── apps/
@@ -170,7 +174,7 @@ PAI/
 
 | Module | Purpose | Status |
 |--------|---------|--------|
-| `main.rs` | USB vault detection (removable-drive scan + manifest validation), hardware profiling | PARTIALLY_IMPLEMENTED |
+| `main.rs` | USB vault detection, manifest validation, hardware profiling, vault-core integration (Argon2id unlock/create/lock) | PARTIALLY_IMPLEMENTED |
 | `llama.rs` | Model manager: manifest-based discovery, CUDA/Metal/Vulkan/CPU detection, health endpoint | PARTIALLY_IMPLEMENTED |
 | `safety.rs` | SafetyGuard (STANDARD/RELAXED/OFF), blocked actions, harm detection | PARTIALLY_IMPLEMENTED |
 | `recording.rs` | Desktop recording engine, privacy levels, bookmarks | NOT_IMPLEMENTED (state machine only, start_recording returns SECURITY_NOT_IMPLEMENTED) |
@@ -213,7 +217,10 @@ PAI/
 # Core contracts (9 tests)
 cd packages/core-contracts && ./gradlew test
 
-# Encrypted vault (17 tests)
+# Vault core — Rust (CI only, WDAC blocks local builds)
+cd packages/vault-core && cargo test
+
+# Encrypted vault — Kotlin (17 tests)
 cd packages/encrypted-vault && ./gradlew test
 
 # Android app (549 JVM tests + 42 instrumented)

@@ -6,12 +6,16 @@ on:
     paths:
       - 'apps/desktop/**'
       - 'packages/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
       - '.github/workflows/desktop-ci.yml'
   pull_request:
     branches: [ main ]
     paths:
       - 'apps/desktop/**'
       - 'packages/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
       - '.github/workflows/desktop-ci.yml'
   workflow_dispatch:
 
@@ -27,13 +31,19 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          fetch-tags: true
 
       - name: Verify no Android files changed
         shell: bash
         run: |
+          # Fetch tags explicitly (fetch-depth: 0 may not always fetch tags)
+          git fetch --tags --force
+
           # Verify the golden baseline tag exists
           if ! git tag -l mobile-golden-baseline-v1 | grep -q mobile-golden-baseline-v1; then
             echo "FAIL: Golden tag 'mobile-golden-baseline-v1' not found"
+            echo "Available tags:"
+            git tag -l
             exit 1
           fi
 
@@ -92,32 +102,29 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+          components: rustfmt, clippy
 
       - name: Cache Cargo
         uses: actions/cache@v4
         with:
           path: |
-            apps/desktop/src-tauri/target
+            target
             ~/.cargo/registry
             ~/.cargo/git
-          key: cargo-${{ matrix.os }}-${{ hashFiles('apps/desktop/src-tauri/Cargo.toml') }}
+          key: cargo-${{ matrix.os }}-${{ hashFiles('**/Cargo.toml') }}
           restore-keys: cargo-${{ matrix.os }}-
 
       - name: cargo fmt
-        working-directory: apps/desktop/src-tauri
         run: cargo fmt --check
 
       - name: cargo check
-        working-directory: apps/desktop/src-tauri
-        run: cargo check
+        run: cargo check --workspace
 
       - name: cargo test
-        working-directory: apps/desktop/src-tauri
-        run: cargo test
+        run: cargo test --workspace
 
       - name: cargo clippy
-        working-directory: apps/desktop/src-tauri
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --workspace -- -D warnings
 
   secret-scan:
     name: Secret Scan
@@ -131,7 +138,7 @@ jobs:
           FOUND=0
           # Check for common secret patterns
           for PATTERN in "password\s*=\s*['\"][^'\"]{8,}['\"]" "api_key\s*=\s*['\"][^'\"]+['\"]" "secret\s*=\s*['\"][^'\"]+['\"]" "token\s*=\s*['\"][^'\"]+['\"]"; do
-            if grep -rPn "$PATTERN" apps/desktop/src-tauri/src/ apps/desktop/src/src/ --include="*.rs" --include="*.ts" --include="*.tsx" 2>/dev/null; then
+            if grep -rPn "$PATTERN" apps/desktop/src-tauri/src/ apps/desktop/src/src/ packages/vault-core/src/ --include="*.rs" --include="*.ts" --include="*.tsx" 2>/dev/null; then
               FOUND=1
             fi
           done

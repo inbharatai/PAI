@@ -7,13 +7,12 @@
 //   This allows password changes without re-encrypting every record.
 
 use std::path::{Path, PathBuf};
-use zeroize::Zeroize;
 
 use crate::crypto::*;
 use crate::error::VaultError;
 use crate::header::{VaultHeader, HEADER_A_FILE, HEADER_B_FILE};
 use crate::journal::Journal;
-use crate::record::{EncryptedRecord, PrivacyLevel, Record, RecordType};
+use crate::record::{EncryptedRecord, Record, RecordType};
 use crate::recovery::RecoveryPhrase;
 
 /// Minimum password length (directive §16: no short passwords)
@@ -112,8 +111,9 @@ impl Vault {
         std::fs::create_dir_all(lock_marker.parent().unwrap())?;
         std::fs::write(&lock_marker, chrono::Utc::now().to_rfc3339())?;
 
-        // Zero the master key from memory
-        drop(master_key);
+        // Zero the master key from memory (not just drop — use secure_zero)
+        let mut key_to_zero = master_key;
+        secure_zero(&mut key_to_zero);
 
         Ok(VaultCreateResult {
             recovery_phrase: recovery_phrase.words,
@@ -222,10 +222,6 @@ impl Vault {
             secure_zero(&mut key);
         }
 
-        // Zero all domain keys from memory
-        // (They're computed on-demand from the master key, so dropping the
-        //  master key is sufficient, but we clear the state explicitly)
-        self.master_key = None;
         self.state = VaultState::Locked;
 
         // Write a lock marker

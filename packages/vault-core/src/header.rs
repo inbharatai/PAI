@@ -238,7 +238,8 @@ impl VaultHeader {
     /// Compute HMAC over the header (excluding the HMAC field itself)
     fn with_hmac(mut self, kek: &[u8; KEY_ENCRYPTION_KEY_LEN]) -> Self {
         self.header_hmac = String::new(); // Clear before computing
-        let header_json = serde_json::to_string(&self).unwrap_or_default();
+        let header_json = serde_json::to_string(&self)
+            .expect("Header serialization must not fail — all fields are serializable");
         let hmac = hmac_sha256(kek, header_json.as_bytes());
         self.header_hmac = hex::encode(hmac);
         self

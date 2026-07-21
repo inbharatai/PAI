@@ -8,10 +8,6 @@
 
 use crate::crypto::{generate_recovery_secret, RECOVERY_SECRET_LEN, secure_zero};
 use crate::error::VaultError;
-    // ... truncated for implementation — full 2048-word list follows the BIP-39 spec
-    // In production, this will contain all 2048 words.
-    // For now, the encoding uses the complete list from the bip39 crate.
-];
 
 // Note: In the actual implementation, we use the full BIP-39 word list.
 // The abbreviated list above is for illustration. The production code

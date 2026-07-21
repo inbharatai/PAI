@@ -76,6 +76,12 @@ secrets.properties
 # --- Gradle ---
 .gradle-wrapper.jar
 
+# --- Rust ---
+target/
+**/target/
+Cargo.lock
+!packages/vault-core/Cargo.lock
+
 # --- Misc ---
 *.bak
 *.tmp
