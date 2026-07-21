@@ -27,7 +27,7 @@ UnoOne Mobile (Android)          UnoOne Power (Desktop)
 |-----------|--------|
 | Mobile app (Android) | **FROZEN** at tag `mobile-golden-baseline-v1` — no changes authorized |
 | Desktop frontend (React) | BUILDS — Vite build passes, real Tauri API calls, no mock data |
-| Desktop backend (Rust) | **BLOCKED** — WDAC/AppLocker policy prevents build scripts on this machine; CI passes |
+| Desktop backend (Rust) | **BLOCKED** — WDAC/AppLocker policy prevents build scripts on this machine; CI_CONFIGURED (no workflow results yet) |
 | USB vault (exFAT) | Formatted, directory structure established, 12B model verified |
 | Vault encryption | **NOT IMPLEMENTED** — Argon2id + XChaCha20-Poly1305 pending |
 | Model inference | **NOT PROVEN from USB** — WDAC blocks llama-server.exe on this machine; verified via Ollama proxy |
@@ -126,7 +126,7 @@ The desktop app discovers the USB drive by:
 - **Deletion**: Tombstone records propagate across platforms
 - **Password-only login**: No username, no email, no cloud account
 
-> ⚠️ **Security warning**: `unlock_vault` currently accepts any password if `vault.id` exists. Argon2id key derivation is not yet implemented. Do not store sensitive data until encryption is complete.
+> ⚠️ **Security warning**: `unlock_vault` and `setup_vault` are **blocked** until Argon2id + XChaCha20-Poly1305 encryption is implemented. They return `SECURITY_NOT_IMPLEMENTED` instead of accepting passwords. Do not store sensitive data until encryption is complete.
 
 ### Safety Pipeline
 
@@ -173,7 +173,7 @@ PAI/
 | `main.rs` | USB vault detection (removable-drive scan + manifest validation), hardware profiling | PARTIALLY_IMPLEMENTED |
 | `llama.rs` | Model manager: manifest-based discovery, CUDA/Metal/Vulkan/CPU detection, health endpoint | PARTIALLY_IMPLEMENTED |
 | `safety.rs` | SafetyGuard (STANDARD/RELAXED/OFF), blocked actions, harm detection | PARTIALLY_IMPLEMENTED |
-| `recording.rs` | Desktop recording engine, privacy levels, bookmarks | NOT_IMPLEMENTED (state machine only) |
+| `recording.rs` | Desktop recording engine, privacy levels, bookmarks | NOT_IMPLEMENTED (state machine only, start_recording returns SECURITY_NOT_IMPLEMENTED) |
 | `browser.rs` | Browser workspace, PageAgent safety pipeline | NOT_IMPLEMENTED |
 | `documents.rs` | Document processing, 10 file types, search | PARTIALLY_IMPLEMENTED (TXT/Markdown only) |
 | `accessibility.rs` | Blind View, OCR, screen reader, camera adapters | NOT_IMPLEMENTED |

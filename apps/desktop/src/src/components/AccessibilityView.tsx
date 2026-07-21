@@ -235,7 +235,7 @@ export function AccessibilityView() {
                   <li><kbd style={{ padding: '2px 6px', background: 'var(--bg-tertiary)', borderRadius: '4px', fontFamily: 'var(--font-mono)', fontSize: '12px' }}>Ctrl+L</kbd> — Lock vault</li>
                   <li><kbd style={{ padding: '2px 6px', background: 'var(--bg-tertiary)', borderRadius: '4px', fontFamily: 'var(--font-mono)', fontSize: '12px' }}>Ctrl+N</kbd> — New chat</li>
                   <li><kbd style={{ padding: '2px 6px', background: 'var(--bg-tertiary)', borderRadius: '4px', fontFamily: 'var(--font-mono)', fontSize: '12px' }}>Ctrl+R</kbd> — Start/stop recording</li>
-                  <li><kbd style={{ padding: '2px 6px', background: 'var(--bg-tertiary)', borderRadius: '4px', fontFamily: '4px', fontFamily: 'var(--font-mono)', fontSize: '12px' }}>Ctrl+M</kbd> — Toggle microphone</li>
+                  <li><kbd style={{ padding: '2px 6px', background: 'var(--bg-tertiary)', borderRadius: '4px', fontSize: '12px', fontFamily: 'var(--font-mono)' }}>Ctrl+M</kbd> — Toggle microphone</li>
                   <li><kbd style={{ padding: '2px 6px', background: 'var(--bg-tertiary)', borderRadius: '4px', fontFamily: 'var(--font-mono)', fontSize: '12px' }}>Ctrl+1-8</kbd> — Switch views</li>
                   <li><kbd style={{ padding: '2px 6px', background: 'var(--bg-tertiary)', borderRadius: '4px', fontFamily: 'var(--font-mono)', fontSize: '12px' }}>Escape</kbd> — Cancel current action</li>
                 </ul>

@@ -339,9 +339,9 @@ fn setup_vault(password: String, profile_name: Option<String>, vault_root: Strin
     // Until Argon2id + XChaCha20-Poly1305 is implemented, setup_vault
     // MUST NOT create a vault that accepts any password as valid.
     //
-    // Directory structure creation is allowed for development/testing,
-    // but the function MUST NOT report success or return a recovery key
-    // until the vault header is properly encrypted with the user's password.
+    // No directories are created, no recovery key is generated,
+    // no plaintext profile is written, and no success is reported.
+    // See directive sections 15 and 16.
     Ok(VaultSetupResult {
         success: false,
         vault_id: String::new(),
@@ -350,14 +350,6 @@ fn setup_vault(password: String, profile_name: Option<String>, vault_root: Strin
                 Creating a vault without Argon2id key derivation and XChaCha20-Poly1305 encryption \
                 would leave user data unprotected. This function will return success only after \
                 proper key wrapping and authenticated vault creation are implemented.".to_string(),
-    })
-}
-
-    Ok(VaultSetupResult {
-        success: true,
-        vault_id,
-        recovery_key,
-        error: String::new(),
     })
 }
 
@@ -511,21 +503,11 @@ fn get_vault_status(state: tauri::State<'_, Mutex<VaultState>>) -> Result<VaultS
         .map(|d| d.total as f64 / (1024.0 * 1024.0 * 1024.0))
         .unwrap_or(0.0);
 
-    // Read profile name if available
-    let profile_name = std::path::Path::new(&vault_state.vault_root)
-        .join("VAULT")
-        .join("identity")
-        .join("profile.txt")
-        .exists()
-        .then(|| {
-            std::fs::read_to_string(
-                std::path::Path::new(&vault_state.vault_root)
-                    .join("VAULT")
-                    .join("identity")
-                    .join("profile.txt")
-            ).unwrap_or_default()
-        })
-        .unwrap_or_default();
+    // SECURITY: Profile name is stored inside the encrypted vault.
+    // Until vault encryption is implemented, profile_name is empty.
+    // Reading plaintext profile.txt from an unencrypted vault would
+    // violate the data-sovereignty rule (directive section 11).
+    let profile_name = String::new();
 
     Ok(VaultStatus {
         is_connected: true,

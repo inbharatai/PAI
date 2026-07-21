@@ -3,7 +3,6 @@
 // State is shared across Tauri commands via tauri::State
 
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -88,6 +87,10 @@ fn get_device_id() -> String {
 }
 
 // Tauri commands — all use shared state
+// SECURITY: Until vault encryption is implemented (directive section 15),
+// recording to the vault would write unencrypted audio to disk.
+// start_recording MUST NOT create directories or write files until
+// Argon2id + XChaCha20-Poly1305 vault encryption is operational.
 
 #[tauri::command]
 pub fn start_recording(
@@ -96,31 +99,26 @@ pub fn start_recording(
     vault_root: String,
     state: tauri::State<'_, RecordingStateHolder>,
 ) -> Result<RecordingSession, String> {
+    // SECURITY BLOCK: Audio recording writes unencrypted data to the vault.
+    // Until vault encryption exists, recording MUST NOT create directories
+    // or write files. The state machine tracks intent, but no audio is captured.
+    // See directive section 15: "Do not write memory, recordings or documents."
+    let _ = vault_root; // Acknowledged but not used — no directory creation until encryption
     let session_id = uuid::Uuid::new_v4().to_string();
 
-    // Create recordings directory if it doesn't exist
-    let recordings_dir = PathBuf::from(&vault_root)
-        .join("VAULT")
-        .join("recordings")
-        .join("audio");
-    std::fs::create_dir_all(&recordings_dir)
-        .map_err(|e| format!("Failed to create recordings directory: {}", e))?;
-
-    let audio_path = recordings_dir.join(format!("{}.enc", session_id));
-
     let session = RecordingSession {
-        id: session_id,
+        id: session_id.clone(),
         title: format!("Recording {}", chrono::Utc::now().format("%Y-%m-%d %H:%M")),
-        state: RecordingState::Recording,
+        state: RecordingState::Error,
         recording_type,
         privacy_level,
-        started_at: Some(chrono::Utc::now().to_rfc3339()),
+        started_at: None,
         stopped_at: None,
         duration_seconds: 0,
         bookmarks: Vec::new(),
         source_platform: "DESKTOP".to_string(),
         source_device_id: get_device_id(),
-        audio_path: Some(audio_path.to_string_lossy().to_string()),
+        audio_path: None,
         transcript_path: None,
         summary_path: None,
     };
@@ -128,7 +126,10 @@ pub fn start_recording(
     *state.current_session.lock().map_err(|e| format!("State lock error: {}", e))? = Some(session.clone());
     *state.start_time.lock().map_err(|e| format!("State lock error: {}", e))? = Some(Instant::now());
 
-    Ok(session)
+    Err("NOT_IMPLEMENTED_SECURITY_BLOCK: Audio recording is not yet available. \
+         Writing unencrypted audio to the vault would violate the data-sovereignty rule. \
+         Recording will be enabled after Argon2id + XChaCha20-Poly1305 vault encryption \
+         is implemented and verified.".to_string())
 }
 
 #[tauri::command]
