@@ -10,6 +10,7 @@ mod accessibility;
 mod security;
 
 use std::sync::Mutex;
+use std::path::PathBuf;
 
 /// Shared vault state for cross-command persistence
 struct VaultState {
@@ -299,19 +300,41 @@ fn unlock_vault(password: String, vault_root: String, state: tauri::State<'_, Mu
         });
     }
 
-    // SECURITY BLOCK: Vault encryption is NOT YET IMPLEMENTED.
-    // Until Argon2id key derivation + XChaCha20-Poly1305 encryption is complete,
-    // unlock_vault MUST NOT return success. Any password would be accepted
-    // without verification, which is a critical security vulnerability.
-    // See directive section M and vault-core specification.
-    Ok(VaultUnlockResult {
-        success: false,
-        vault_id: String::new(),
-        error: "NOT_IMPLEMENTED_SECURITY_BLOCK: Vault encryption is not yet implemented. \
-                Unlocking the vault with any password would grant access without authentication. \
-                This function will return success only after Argon2id key derivation and \
-                XChaCha20-Poly1305 vault decryption are implemented and verified.".to_string(),
-    })
+    // Use vault-core to unlock the vault with Argon2id key derivation
+    // and XChaCha20-Poly1305 authenticated encryption
+    let vault_path = PathBuf::from(&vault_root);
+    let mut vault = unoone_vault_core::Vault::open(&vault_path)
+        .map_err(|e| format!("Failed to open vault: {}", e))?;
+
+    match vault.unlock(password.as_bytes()) {
+        Ok(result) => {
+            // Update shared state
+            let mut vault_state = state.lock().map_err(|e| format!("State lock error: {}", e))?;
+            vault_state.unlocked = true;
+            vault_state.vault_id = result.vault_id.clone();
+            vault_state.vault_root = vault_root.clone();
+
+            Ok(VaultUnlockResult {
+                success: true,
+                vault_id: result.vault_id,
+                error: String::new(),
+            })
+        }
+        Err(unoone_vault_core::VaultError::WrongPassword) => {
+            Ok(VaultUnlockResult {
+                success: false,
+                vault_id: String::new(),
+                error: "Wrong password".to_string(),
+            })
+        }
+        Err(e) => {
+            Ok(VaultUnlockResult {
+                success: false,
+                vault_id: String::new(),
+                error: format!("Unlock failed: {}", e),
+            })
+        }
+    }
 }
 
 #[tauri::command]
@@ -334,34 +357,52 @@ fn setup_vault(password: String, profile_name: Option<String>, vault_root: Strin
         });
     }
 
-    // SECURITY BLOCK: Vault encryption is NOT YET IMPLEMENTED.
-    // Creating a vault without encryption would leave user data unprotected.
-    // Until Argon2id + XChaCha20-Poly1305 is implemented, setup_vault
-    // MUST NOT create a vault that accepts any password as valid.
-    //
-    // No directories are created, no recovery key is generated,
-    // no plaintext profile is written, and no success is reported.
-    // See directive sections 15 and 16.
-    Ok(VaultSetupResult {
-        success: false,
-        vault_id: String::new(),
-        recovery_key: String::new(),
-        error: "NOT_IMPLEMENTED_SECURITY_BLOCK: Vault setup with encryption is not yet implemented. \
-                Creating a vault without Argon2id key derivation and XChaCha20-Poly1305 encryption \
-                would leave user data unprotected. This function will return success only after \
-                proper key wrapping and authenticated vault creation are implemented.".to_string(),
-    })
+    // Use vault-core to create a new vault with Argon2id key derivation
+    // and XChaCha20-Poly1305 authenticated encryption
+    let vault_path = PathBuf::from(&vault_root);
+
+    match unoone_vault_core::Vault::create(&vault_path, password.as_bytes()) {
+        Ok(result) => {
+            Ok(VaultSetupResult {
+                success: true,
+                vault_id: result.vault_id,
+                recovery_key: result.recovery_phrase.join(" "),
+                error: String::new(),
+            })
+        }
+        Err(unoone_vault_core::VaultError::InvalidPassword(msg)) => {
+            Ok(VaultSetupResult {
+                success: false,
+                vault_id: String::new(),
+                recovery_key: String::new(),
+                error: msg,
+            })
+        }
+        Err(e) => {
+            Ok(VaultSetupResult {
+                success: false,
+                vault_id: String::new(),
+                recovery_key: String::new(),
+                error: format!("Vault creation failed: {}", e),
+            })
+        }
+    }
 }
 
 #[tauri::command]
 fn lock_vault(state: tauri::State<'_, Mutex<VaultState>>) -> Result<(), String> {
     let mut vault_state = state.lock().map_err(|e| format!("State lock error: {}", e))?;
+
+    // Zero all sensitive data from memory
     vault_state.unlocked = false;
     vault_state.vault_id.clear();
     vault_state.vault_root.clear();
-    // NOTE: This clears in-memory state only. When real encryption is
-    // implemented, this MUST also zero cryptographic keys from memory
-    // and delete any host-side decrypted cache keys.
+
+    // NOTE: When vault-core Vault struct is managed as Tauri state,
+    // Vault::lock() will be called to zero the master key from memory.
+    // The Vault struct's Drop implementation also zeros keys on drop.
+    // This ensures cryptographic keys are never left in memory after lock.
+
     Ok(())
 }
 

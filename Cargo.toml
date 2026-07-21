@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "packages/vault-core",
+    "apps/desktop/src-tauri",
+]
+resolver = "2"
