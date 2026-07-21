@@ -1,15 +1,29 @@
 // UnoOne Power — Private AI Desktop Workstation
-// Tauri backend: USB vault detection, hardware profiling, model management
+// Tauri backend: USB vault detection, hardware profiling, model management, safety guard
+
+mod llama;
+mod safety;
 
 fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
+            // Vault commands
             detect_vault,
             unlock_vault,
             setup_vault,
             lock_vault,
-            get_hardware_profile,
             get_vault_status,
+            // Hardware profile
+            get_hardware_profile,
+            // Model management
+            llama::list_models,
+            llama::detect_acceleration,
+            llama::get_model_config,
+            llama::get_model_status,
+            // Safety guard
+            safety::get_security_level,
+            safety::set_security_level,
+            safety::review_tool_action,
         ])
         .run(tauri::generate_context!())
         .expect("error while running UnoOne Power");
@@ -97,10 +111,10 @@ fn get_hardware_profile() -> Result<HardwareProfile, String> {
         gpu_vram_gb: 0.0,
         os_name,
         os_version,
-        has_cuda: false, // Would need CUDA detection
+        has_cuda: false, // Will be detected by llama module
         has_metal: cfg!(target_os = "macos"),
-        has_vulkan: false, // Would need Vulkan detection
-        usb_speed: String::new(), // Would need USB speed detection
+        has_vulkan: false, // Will be detected by llama module
+        usb_speed: String::new(),
     })
 }
 

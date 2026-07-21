@@ -7,6 +7,7 @@ import { MemoryExplorer } from './components/MemoryExplorer';
 import { VaultView } from './components/VaultView';
 import { SettingsView } from './components/SettingsView';
 import { HardwareProfile } from './components/HardwareProfile';
+import { ModelManager } from './components/ModelManager';
 
 type AppScreen = 'unlock' | 'main';
 
@@ -62,6 +63,8 @@ function App() {
         return <MemoryExplorer />;
       case 'vault':
         return <VaultView />;
+      case 'model':
+        return <ModelManager />;
       case 'hardware':
         return <HardwareProfile />;
       case 'settings':

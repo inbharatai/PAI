@@ -46,6 +46,70 @@ export interface VaultStatus {
   total_space_gb: number;
 }
 
+export interface ModelInfo {
+  name: string;
+  model_type: string;
+  quantization: string;
+  file_size_gb: number;
+  context_length: number;
+  available: boolean;
+  path: string;
+}
+
+export interface ModelConfig {
+  model_path: string;
+  context_size: number;
+  batch_size: number;
+  threads: number;
+  gpu_layers: number;
+  temperature: number;
+  top_p: number;
+  top_k: number;
+  repeat_penalty: number;
+  max_tokens: number;
+}
+
+export interface ConversationTurn {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export interface InferenceRequest {
+  prompt: string;
+  system_prompt?: string;
+  conversation_history: ConversationTurn[];
+  max_tokens?: number;
+  temperature?: number;
+  stop_sequences?: string[];
+}
+
+export interface InferenceResponse {
+  text: string;
+  tokens_generated: number;
+  tokens_per_second: number;
+  model_id: string;
+}
+
+export type AccelerationBackend = 'CUDA' | 'METAL' | 'VULKAN' | 'CPU';
+export type SecurityLevel = 'STANDARD' | 'RELAXED' | 'OFF';
+export type ModelStatus = 'NOT_LOADED' | 'LOADING' | 'LOADED' | 'GENERATING' | 'ERROR';
+
+export interface ToolAction {
+  action_id: string;
+  tool_name: string;
+  parameters: Record<string, unknown>;
+  confidence: number;
+  raw_output: string;
+}
+
+export interface SafetyVerdict {
+  action_id: string;
+  approved: boolean;
+  reason: string;
+  risk_level: 'SAFE' | 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+  modified_parameters: Record<string, unknown> | null;
+}
+
 // Tauri invoke helper — works with @tauri-apps/api or falls back to mock
 async function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   try {
@@ -64,21 +128,13 @@ function mockInvoke(command: string, args?: Record<string, unknown>): unknown {
       return {
         detected: true,
         vault_root: 'D:\\UNOONE',
-        vault_id: 'mock-vault-id-001',
+        vault_id: '440d5ce9-7fb1-4858-a8b4-8102691009ca',
       };
     case 'unlock_vault':
       if ((args?.password as string) === 'test') {
-        return {
-          success: true,
-          vault_id: 'mock-vault-id-001',
-          error: '',
-        };
+        return { success: true, vault_id: '440d5ce9-7fb1-4858-a8b4-8102691009ca', error: '' };
       }
-      return {
-        success: false,
-        vault_id: '',
-        error: 'Incorrect password',
-      };
+      return { success: false, vault_id: '', error: 'Incorrect password' };
     case 'setup_vault':
       return {
         success: true,
@@ -107,10 +163,51 @@ function mockInvoke(command: string, args?: Record<string, unknown>): unknown {
       return {
         is_connected: true,
         is_unlocked: true,
-        vault_id: 'mock-vault-id-001',
+        vault_id: '440d5ce9-7fb1-4858-a8b4-8102691009ca',
         profile_name: 'Personal',
         used_space_gb: 8.4,
         total_space_gb: 460,
+      };
+    case 'list_models':
+      return [
+        {
+          name: 'Gemma 4 12B Q4_K_M',
+          model_type: 'gemma-4-12b',
+          quantization: 'Q4_K_M',
+          file_size_gb: 7.4,
+          context_length: 8192,
+          available: true,
+          path: 'D:\\UNOONE\\MODELS\\gemma4-12b-q4-gguf\\gemma-4-12b-q4_k_m.gguf',
+        },
+      ];
+    case 'detect_acceleration':
+      return ['CUDA', 'VULKAN', 'CPU'];
+    case 'get_model_config':
+      return {
+        model_path: 'D:\\UNOONE\\MODELS\\gemma4-12b-q4-gguf\\gemma-4-12b-q4_k_m.gguf',
+        context_size: 4096,
+        batch_size: 512,
+        threads: 0,
+        gpu_layers: -1,
+        temperature: 0.7,
+        top_p: 0.9,
+        top_k: 40,
+        repeat_penalty: 1.1,
+        max_tokens: 4096,
+      };
+    case 'get_model_status':
+      return 'NOT_LOADED';
+    case 'get_security_level':
+      return 'STANDARD';
+    case 'set_security_level':
+      return `Security level set to ${args?.level}`;
+    case 'review_tool_action':
+      return {
+        action_id: (args?.action as Record<string, unknown>)?.action_id || 'mock',
+        approved: true,
+        reason: 'Approved by mock safety guard',
+        risk_level: 'SAFE',
+        modified_parameters: null,
       };
     default:
       return null;
@@ -118,6 +215,7 @@ function mockInvoke(command: string, args?: Record<string, unknown>): unknown {
 }
 
 export const tauriApi = {
+  // Vault
   detectVault: () => invoke<VaultInfo>('detect_vault'),
   unlockVault: (password: string, vaultRoot: string) =>
     invoke<VaultUnlockResult>('unlock_vault', { password, vault_root: vaultRoot }),
@@ -126,4 +224,16 @@ export const tauriApi = {
   lockVault: () => invoke<void>('lock_vault'),
   getHardwareProfile: () => invoke<HardwareProfile>('get_hardware_profile'),
   getVaultStatus: () => invoke<VaultStatus>('get_vault_status'),
+
+  // Model management
+  listModels: (vaultRoot: string) => invoke<ModelInfo[]>('list_models', { vault_root: vaultRoot }),
+  detectAcceleration: () => invoke<AccelerationBackend[]>('detect_acceleration'),
+  getModelConfig: () => invoke<ModelConfig>('get_model_config'),
+  getModelStatus: () => invoke<ModelStatus>('get_model_status'),
+
+  // Safety guard
+  getSecurityLevel: () => invoke<SecurityLevel>('get_security_level'),
+  setSecurityLevel: (level: SecurityLevel) => invoke<string>('set_security_level', { level }),
+  reviewToolAction: (action: ToolAction, securityLevel: SecurityLevel) =>
+    invoke<SafetyVerdict>('review_tool_action', { action, security_level: securityLevel }),
 };
