@@ -485,6 +485,7 @@ impl Drop for Vault {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::record::RecordType;
 
     fn create_test_vault(dir: &tempfile::TempDir) -> Vault {
         let vault_root = dir.path().join("UNOONE");

@@ -270,7 +270,7 @@ mod tests {
     #[test]
     fn test_secret_is_zeroed_on_drop() {
         let phrase = RecoveryPhrase::generate();
-        let secret_ptr = phrase.secret.as_ptr();
+        let _secret_ptr = phrase.secret.as_ptr();
 
         // Force drop
         drop(phrase);

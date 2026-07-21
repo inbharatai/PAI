@@ -374,7 +374,7 @@ mod tests {
         let journal = Journal::new(dir.path());
 
         // Begin a transaction but don't commit (simulating a crash)
-        let tx_id = journal.begin_transaction(vec![
+        let _tx_id = journal.begin_transaction(vec![
             JournalOperation::Write {
                 record_id: "rec-003".to_string(),
                 relative_path: "VAULT/records/rec-003.enc".to_string(),
