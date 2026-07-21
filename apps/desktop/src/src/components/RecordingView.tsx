@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { tauriApi } from '../lib/tauri';
 
 type RecordingType = 'VOICE_MEMO' | 'MEETING' | 'LECTURE' | 'INTERVIEW' | 'NOTE';
 type PrivacyLevel = 'FULL' | 'TRANSCRIPT_ONLY' | 'SUMMARY_ONLY' | 'PRIVATE_SESSION';
@@ -36,7 +37,25 @@ export function RecordingView() {
   const [recordingType, setRecordingType] = useState<RecordingType>('VOICE_MEMO');
   const [privacyLevel, setPrivacyLevel] = useState<PrivacyLevel>('FULL');
   const [bookmarks, setBookmarks] = useState<number>(0);
+  const [vaultRoot, setVaultRoot] = useState('D:\\UNOONE');
+  const [error, setError] = useState('');
   const timerRef = useRef<number | null>(null);
+
+  // Detect vault root
+  const detectVault = useCallback(async () => {
+    try {
+      const info = await tauriApi.detectVault();
+      if (info.detected) {
+        setVaultRoot(info.vault_root);
+      }
+    } catch {
+      // Use default vault root
+    }
+  }, []);
+
+  useEffect(() => {
+    detectVault();
+  }, [detectVault]);
 
   useEffect(() => {
     if (isRecording && !isPaused) {
@@ -61,9 +80,15 @@ export function RecordingView() {
     return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
 
-  const handleRecord = () => {
+  const handleRecord = async () => {
+    setError('');
     if (isRecording) {
-      // Stop recording
+      // Stop recording via Tauri API
+      try {
+        await tauriApi.stopRecording();
+      } catch {
+        // If Tauri not available, still update UI
+      }
       setIsRecording(false);
       setIsPaused(false);
       setRecordings(prev => [
@@ -81,19 +106,43 @@ export function RecordingView() {
       setElapsed(0);
       setBookmarks(0);
     } else {
-      // Start recording
-      setElapsed(0);
-      setBookmarks(0);
-      setIsRecording(true);
+      // Start recording via Tauri API
+      try {
+        await tauriApi.startRecording(recordingType, privacyLevel, vaultRoot);
+        setIsRecording(true);
+        setElapsed(0);
+        setBookmarks(0);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+        // Still allow UI recording even if Tauri is not available (for development)
+        setIsRecording(true);
+        setElapsed(0);
+        setBookmarks(0);
+      }
     }
   };
 
-  const handlePause = () => {
-    setIsPaused(!isPaused);
+  const handlePause = async () => {
+    setError('');
+    if (isPaused) {
+      try {
+        await tauriApi.resumeRecording();
+      } catch {}
+      setIsPaused(false);
+    } else {
+      try {
+        await tauriApi.pauseRecording();
+      } catch {}
+      setIsPaused(true);
+    }
   };
 
-  const handleBookmark = () => {
+  const handleBookmark = async () => {
+    setError('');
     setBookmarks(prev => prev + 1);
+    try {
+      await tauriApi.addBookmark(null);
+    } catch {}
   };
 
   const handleCancel = () => {
@@ -118,6 +167,18 @@ export function RecordingView() {
           </button>
         </div>
       </div>
+
+      {error && (
+        <div style={{
+          padding: '8px 16px',
+          background: 'rgba(239,68,68,0.1)',
+          borderTop: '1px solid rgba(239,68,68,0.3)',
+          fontSize: '13px',
+          color: 'var(--danger)',
+        }}>
+          {error}
+        </div>
+      )}
 
       <div className="main-body" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '24px', paddingTop: '24px' }}>
         {/* Recording type and privacy selectors */}

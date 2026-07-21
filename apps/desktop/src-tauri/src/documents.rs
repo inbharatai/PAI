@@ -1,5 +1,5 @@
 // UnoOne Power — Desktop Document Processing
-// Document parsers, encrypted index, and memory retrieval
+// Lists real documents from vault; text extraction requires real parsers (not yet wired)
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -67,7 +67,7 @@ pub struct MemorySearchResult {
     pub created_at: String,
 }
 
-/// Document processor state
+/// Document processor — reads real files from vault
 pub struct DocumentProcessor {
     vault_root: String,
 }
@@ -79,13 +79,17 @@ impl DocumentProcessor {
         }
     }
 
-    /// List all documents in the vault
+    /// List all documents in the vault directory
     pub fn list_documents(&self) -> Vec<DocumentMetadata> {
         let docs_dir = PathBuf::from(&self.vault_root)
             .join("VAULT")
             .join("documents");
 
         let mut documents = Vec::new();
+
+        if !docs_dir.exists() {
+            return documents;
+        }
 
         if let Ok(entries) = std::fs::read_dir(&docs_dir) {
             for entry in entries.flatten() {
@@ -109,18 +113,42 @@ impl DocumentProcessor {
                         .map(|m| m.len())
                         .unwrap_or(0);
 
+                    let created = std::fs::metadata(&path)
+                        .ok()
+                        .and_then(|m| m.created().ok())
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_secs().to_string())
+                        .unwrap_or_default();
+
+                    let modified = std::fs::metadata(&path)
+                        .ok()
+                        .and_then(|m| m.modified().ok())
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_secs().to_string())
+                        .unwrap_or_default();
+
+                    // For text files, count words
+                    let word_count = match doc_type {
+                        DocumentType::Txt | DocumentType::Markdown => {
+                            std::fs::read_to_string(&path)
+                                .map(|s| s.split_whitespace().count() as u32)
+                                .ok()
+                        }
+                        _ => None,
+                    };
+
                     documents.push(DocumentMetadata {
                         id: path.file_stem().unwrap_or_default().to_string_lossy().to_string(),
                         title: path.file_stem().unwrap_or_default().to_string_lossy().to_string(),
                         document_type: doc_type,
                         file_path: path.to_string_lossy().to_string(),
                         file_size_bytes: file_size,
-                        created_at: String::new(),
-                        modified_at: String::new(),
+                        created_at: created,
+                        modified_at: modified,
                         source_platform: "DESKTOP".to_string(),
                         tags: Vec::new(),
                         page_count: None,
-                        word_count: None,
+                        word_count,
                     });
                 }
             }
@@ -129,45 +157,142 @@ impl DocumentProcessor {
         documents
     }
 
-    /// Process a document — extract text, generate summary
-    /// In production, this would use actual parsers (pdf, docx, etc.)
+    /// Process a document — extract text from supported formats
+    /// TXT and Markdown are fully supported; other formats require parsers
     pub fn process_document(&self, document_id: &str) -> DocumentProcessResult {
         let start = std::time::Instant::now();
 
-        // TODO: Implement actual document parsing
-        // - PDF: pdf-extract or poppler
-        // - DOCX: docx-rs or similar
-        // - TXT/MD: direct read
-        // - CSV/XLSX: parse and extract
-        // - Image: OCR via Tesseract
-        // - Audio: STT via Whisper
+        let docs_dir = PathBuf::from(&self.vault_root)
+            .join("VAULT")
+            .join("documents");
+
+        // Find the document by ID (filename stem)
+        if let Ok(entries) = std::fs::read_dir(&docs_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if let Some(stem) = path.file_stem() {
+                    if stem.to_string_lossy() == document_id {
+                        if let Some(ext) = path.extension() {
+                            let ext_str = ext.to_string_lossy().to_lowercase();
+                            match ext_str.as_str() {
+                                "txt" | "md" | "markdown" => {
+                                    // Text formats — read directly
+                                    match std::fs::read_to_string(&path) {
+                                        Ok(text) => {
+                                            let word_count = text.split_whitespace().count();
+                                            let preview = if text.len() > 500 {
+                                                format!("{}...[truncated, {} words total]", &text[..500], word_count)
+                                            } else {
+                                                text.clone()
+                                            };
+                                            return DocumentProcessResult {
+                                                document_id: document_id.to_string(),
+                                                success: true,
+                                                extracted_text: Some(text),
+                                                summary: Some(format!("[Auto-extracted text, {} words]", word_count)),
+                                                error: None,
+                                                processing_time_ms: start.elapsed().as_millis() as u64,
+                                            };
+                                        }
+                                        Err(e) => {
+                                            return DocumentProcessResult {
+                                                document_id: document_id.to_string(),
+                                                success: false,
+                                                extracted_text: None,
+                                                summary: None,
+                                                error: Some(format!("Failed to read file: {}", e)),
+                                                processing_time_ms: start.elapsed().as_millis() as u64,
+                                            };
+                                        }
+                                    }
+                                }
+                                _ => {
+                                    // Binary formats — parser not yet integrated
+                                    return DocumentProcessResult {
+                                        document_id: document_id.to_string(),
+                                        success: false,
+                                        extracted_text: None,
+                                        summary: None,
+                                        error: Some(format!(
+                                            "Document format .{} is not yet supported. Supported: .txt, .md, .markdown",
+                                            ext_str
+                                        )),
+                                        processing_time_ms: start.elapsed().as_millis() as u64,
+                                    };
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         DocumentProcessResult {
             document_id: document_id.to_string(),
-            success: true,
-            extracted_text: Some("[Document text extraction placeholder]".to_string()),
-            summary: Some("[LLM-generated summary placeholder]".to_string()),
-            error: None,
+            success: false,
+            extracted_text: None,
+            summary: None,
+            error: Some(format!("Document '{}' not found in vault", document_id)),
             processing_time_ms: start.elapsed().as_millis() as u64,
         }
     }
 
-    /// Search memories by query
-    /// In production, this would use encrypted vector embeddings
+    /// Search memories — reads from vault memory directory
+    /// Returns matching memory files; full vector search not yet implemented
     pub fn search_memories(&self, query: &MemorySearchQuery) -> Vec<MemorySearchResult> {
-        // TODO: Implement actual encrypted vector search
-        // - Use sentence-transformers for embeddings
-        // - Store embeddings in encrypted index on vault
-        // - Cosine similarity search against query embedding
+        let memory_dir = PathBuf::from(&self.vault_root)
+            .join("VAULT")
+            .join("memory");
 
-        vec![MemorySearchResult {
-            id: "mock-result-1".to_string(),
-            memory_type: "PERSONAL".to_string(),
-            title: format!("Results for: {}", query.query),
-            preview: "This is a placeholder search result. Actual search will use encrypted vector embeddings.".to_string(),
-            relevance: 0.85,
-            created_at: chrono::Utc::now().to_rfc3339(),
-        }]
+        let mut results = Vec::new();
+
+        if !memory_dir.exists() {
+            return results;
+        }
+
+        // Simple text-based search through memory files
+        if let Ok(entries) = std::fs::read_dir(&memory_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().map(|e| e == "json" || e == "txt" || e == "md").unwrap_or(false) {
+                    if let Ok(content) = std::fs::read_to_string(&path) {
+                        let query_lower = query.query.to_lowercase();
+                        if query.query == "*" || content.to_lowercase().contains(&query_lower) {
+                            let file_stem = path.file_stem()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                                .to_string();
+
+                            let preview = if content.len() > 200 {
+                                format!("{}...", &content[..200])
+                            } else {
+                                content.clone()
+                            };
+
+                            results.push(MemorySearchResult {
+                                id: file_stem.clone(),
+                                memory_type: path.extension().unwrap_or_default().to_string_lossy().to_string(),
+                                title: file_stem,
+                                preview,
+                                relevance: if query.query == "*" { 1.0 } else { 0.5 },
+                                created_at: std::fs::metadata(&path)
+                                    .ok()
+                                    .and_then(|m| m.modified().ok())
+                                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                                    .map(|d| d.as_secs().to_string())
+                                    .unwrap_or_default(),
+                            });
+
+                            if results.len() >= query.limit as usize {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        results
     }
 }
 

@@ -1,6 +1,9 @@
 /**
  * UnoOne Power — Tauri API bindings
  * Type-safe bridge between React frontend and Rust backend
+ *
+ * In production (Tauri runtime available), all calls go to the Rust backend.
+ * In development without Tauri, calls throw errors — no mock data.
  */
 
 export interface VaultInfo {
@@ -132,132 +135,32 @@ export interface RecordingSession {
   summary_path: string | null;
 }
 
-// Tauri invoke helper — works with @tauri-apps/api or falls back to mock
-async function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
-  try {
-    const { invoke: tauriInvoke } = await import('@tauri-apps/api/core');
-    return await tauriInvoke<T>(command, args);
-  } catch {
-    // Mock fallback for development without Tauri runtime
-    console.warn(`[Tauri Mock] ${command}`, args);
-    return mockInvoke(command, args) as T;
-  }
+export interface DocumentMetadata {
+  id: string;
+  title: string;
+  document_type: string;
+  file_path: string;
+  file_size_bytes: number;
+  created_at: string;
+  modified_at: string;
+  source_platform: string;
+  tags: string[];
+  page_count: number | null;
+  word_count: number | null;
 }
 
-function mockInvoke(command: string, args?: Record<string, unknown>): unknown {
-  switch (command) {
-    case 'detect_vault':
-      return {
-        detected: true,
-        vault_root: 'D:\\UNOONE',
-        vault_id: '440d5ce9-7fb1-4858-a8b4-8102691009ca',
-      };
-    case 'unlock_vault':
-      if ((args?.password as string) === 'test') {
-        return { success: true, vault_id: '440d5ce9-7fb1-4858-a8b4-8102691009ca', error: '' };
-      }
-      return { success: false, vault_id: '', error: 'Incorrect password' };
-    case 'setup_vault':
-      return {
-        success: true,
-        vault_id: 'new-vault-' + Date.now(),
-        recovery_key: 'alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu',
-        error: '',
-      };
-    case 'lock_vault':
-      return null;
-    case 'get_hardware_profile':
-      return {
-        total_ram_gb: 32,
-        available_ram_gb: 24,
-        cpu_count: 16,
-        cpu_speed_ghz: 3.5,
-        gpu_name: 'NVIDIA RTX 4070',
-        gpu_vram_gb: 12,
-        os_name: 'Windows',
-        os_version: '11',
-        has_cuda: true,
-        has_metal: false,
-        has_vulkan: true,
-        usb_speed: 'USB 3.2',
-      };
-    case 'get_vault_status':
-      return {
-        is_connected: true,
-        is_unlocked: true,
-        vault_id: '440d5ce9-7fb1-4858-a8b4-8102691009ca',
-        profile_name: 'Personal',
-        used_space_gb: 8.4,
-        total_space_gb: 460,
-      };
-    case 'list_models':
-      return [
-        {
-          name: 'Gemma 4 12B Q4_K_M',
-          model_type: 'gemma-4-12b',
-          quantization: 'Q4_K_M',
-          file_size_gb: 7.4,
-          context_length: 8192,
-          available: true,
-          path: 'D:\\UNOONE\\MODELS\\gemma4-12b-q4-gguf\\gemma-4-12b-q4_k_m.gguf',
-        },
-      ];
-    case 'detect_acceleration':
-      return ['CUDA', 'VULKAN', 'CPU'];
-    case 'get_model_config':
-      return {
-        model_path: 'D:\\UNOONE\\MODELS\\gemma4-12b-q4-gguf\\gemma-4-12b-q4_k_m.gguf',
-        context_size: 4096,
-        batch_size: 512,
-        threads: 0,
-        gpu_layers: -1,
-        temperature: 0.7,
-        top_p: 0.9,
-        top_k: 40,
-        repeat_penalty: 1.1,
-        max_tokens: 4096,
-      };
-    case 'get_model_status':
-      return 'NOT_LOADED';
-    case 'get_security_level':
-      return 'STANDARD';
-    case 'set_security_level':
-      return `Security level set to ${args?.level}`;
-    case 'review_tool_action':
-      return {
-        action_id: (args?.action as Record<string, unknown>)?.action_id || 'mock',
-        approved: true,
-        reason: 'Approved by mock safety guard',
-        risk_level: 'SAFE',
-        modified_parameters: null,
-      };
-    case 'start_recording':
-      return {
-        id: 'rec-' + Date.now(),
-        title: 'Recording ' + new Date().toLocaleTimeString(),
-        state: 'RECORDING',
-        recording_type: args?.recording_type || 'VOICE_MEMO',
-        privacy_level: args?.privacy_level || 'FULL',
-        started_at: new Date().toISOString(),
-        stopped_at: null,
-        duration_seconds: 0,
-        bookmarks: [],
-        source_platform: 'DESKTOP',
-        source_device_id: 'mock-desktop',
-        audio_path: 'D:\\UNOONE\\VAULT\\recordings\\audio\\rec-' + Date.now() + '.enc',
-        transcript_path: null,
-        summary_path: null,
-      };
-    case 'pause_recording':
-    case 'resume_recording':
-      return { ...mockInvoke('start_recording', args), state: command === 'pause_recording' ? 'PAUSED' : 'RECORDING' };
-    case 'stop_recording':
-      return { ...mockInvoke('start_recording', args), state: 'PROCESSING' };
-    case 'add_bookmark':
-      return { ...mockInvoke('start_recording', args), bookmarks: [{ timestamp_seconds: 30, label: args?.label || null }] };
-    default:
-      return null;
-  }
+export interface AccessibilityStatus {
+  screen_reader_detected: boolean;
+  high_contrast: boolean;
+  reduced_motion: boolean;
+  font_scale: number;
+  screen_reader_name: string;
+}
+
+// Tauri invoke — works in Tauri runtime only
+async function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  const { invoke: tauriInvoke } = await import('@tauri-apps/api/core');
+  return tauriInvoke<T>(command, args);
 }
 
 export const tauriApi = {
@@ -290,4 +193,16 @@ export const tauriApi = {
   resumeRecording: () => invoke<RecordingSession>('resume_recording'),
   stopRecording: () => invoke<RecordingSession>('stop_recording'),
   addBookmark: (label: string | null) => invoke<RecordingSession>('add_bookmark', { label }),
+
+  // Documents
+  listDocuments: (vaultRoot: string) => invoke<DocumentMetadata[]>('list_documents', { vault_root: vaultRoot }),
+  searchMemories: (query: { query: string; memory_types: string[]; limit: number; min_relevance: number }, vaultRoot: string) =>
+    invoke<Array<{ id: string; memory_type: string; title: string; preview: string; relevance: number; created_at: string }>>('search_memories', { query, vault_root: vaultRoot }),
+
+  // Accessibility
+  getAccessibilityStatus: () => invoke<AccessibilityStatus>('get_accessibility_status'),
+
+  // Security
+  emergencyLock: (vaultRoot: string) => invoke<{ success: boolean; keys_cleared: boolean; vault_locked: boolean; timestamp: string }>('emergency_lock', { vault_root: vaultRoot }),
+  generateManifest: (vaultRoot: string) => invoke<VaultInfo & { entries: number; manifest_sha256: string }>('generate_manifest', { vault_root: vaultRoot }),
 };

@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 
 interface ChatMessage {
   id: string;
@@ -7,17 +7,42 @@ interface ChatMessage {
   timestamp: number;
 }
 
+// llama-server HTTP API endpoint
+const LLAMA_SERVER_URL = 'http://127.0.0.1:8342';
+
 export function ChatView() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
+  const [modelStatus, setModelStatus] = useState<'unknown' | 'loaded' | 'not_loaded' | 'error'>('unknown');
+  const [serverError, setServerError] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  const handleSend = () => {
+  // Check if llama-server is reachable
+  const checkModelStatus = useCallback(async () => {
+    try {
+      const response = await fetch(`${LLAMA_SERVER_URL}/health`, { signal: AbortSignal.timeout(2000) });
+      if (response.ok) {
+        setModelStatus('loaded');
+        setServerError('');
+        return true;
+      }
+    } catch {
+      // Server not running
+    }
+    setModelStatus('not_loaded');
+    return false;
+  }, []);
+
+  useEffect(() => {
+    checkModelStatus();
+  }, [checkModelStatus]);
+
+  const handleSend = async () => {
     if (!input.trim() || isGenerating) return;
 
     const userMessage: ChatMessage = {
@@ -30,19 +55,59 @@ export function ChatView() {
     setMessages(prev => [...prev, userMessage]);
     setInput('');
     setIsGenerating(true);
+    setServerError('');
 
-    // TODO: Replace with actual Gemma 4 12B inference via llama.cpp
-    // For now, echo a placeholder response
-    setTimeout(() => {
-      const assistantMessage: ChatMessage = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: `[Gemma 4 12B] I received your message. Model inference will be connected in Phase 6.\n\nYour message: "${userMessage.content}"`,
-        timestamp: Date.now(),
-      };
-      setMessages(prev => [...prev, assistantMessage]);
+    try {
+      // Build conversation history for the model
+      const conversationHistory = messages
+        .concat(userMessage)
+        .map(msg => ({
+          role: msg.role,
+          content: msg.content,
+        }));
+
+      // Call llama-server completion API
+      const response = await fetch(`${LLAMA_SERVER_URL}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'gemma-4-12b',
+          messages: conversationHistory,
+          max_tokens: 4096,
+          temperature: 0.7,
+          stream: false,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Server error: ${response.status} — ${errorText}`);
+      }
+
+      const data = await response.json();
+      const assistantContent = data.choices?.[0]?.message?.content || data.content || '';
+
+      if (assistantContent) {
+        const assistantMessage: ChatMessage = {
+          id: (Date.now() + 1).toString(),
+          role: 'assistant',
+          content: assistantContent,
+          timestamp: Date.now(),
+        };
+        setMessages(prev => [...prev, assistantMessage]);
+      } else {
+        setServerError('Model returned an empty response.');
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      if (errorMsg.includes('Failed to fetch') || errorMsg.includes('NetworkError') || errorMsg.includes('connect')) {
+        setServerError('Cannot connect to Gemma 4. Make sure the model is loaded (Settings → Model Manager).');
+      } else {
+        setServerError(errorMsg);
+      }
+    } finally {
       setIsGenerating(false);
-    }, 1000);
+    }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -50,6 +115,10 @@ export function ChatView() {
       e.preventDefault();
       handleSend();
     }
+  };
+
+  const formatTime = (ts: number) => {
+    return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
   return (
@@ -62,6 +131,16 @@ export function ChatView() {
             </svg>
             <h3>Chat with Gemma 4</h3>
             <p>Your private AI assistant. All conversations are encrypted and stored on your Pocket USB.</p>
+            {modelStatus === 'not_loaded' && (
+              <div style={{ marginTop: '12px', padding: '12px 16px', background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-md)', fontSize: '13px', color: 'var(--text-secondary)' }}>
+                ⚠️ No model loaded. Open <strong>Model Manager</strong> to load Gemma 4 12B.
+              </div>
+            )}
+            {modelStatus === 'loaded' && (
+              <div style={{ marginTop: '12px', padding: '12px 16px', background: 'rgba(34,197,94,0.1)', borderRadius: 'var(--radius-md)', fontSize: '13px', color: 'var(--success)' }}>
+                ✅ Gemma 4 12B is loaded and ready
+              </div>
+            )}
           </div>
         )}
         {messages.map(msg => (
@@ -69,7 +148,12 @@ export function ChatView() {
             <div className="chat-avatar">
               {msg.role === 'user' ? 'U' : 'G'}
             </div>
-            <div className="chat-bubble">{msg.content}</div>
+            <div className="chat-bubble">
+              <div style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</div>
+              <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                {formatTime(msg.timestamp)}
+              </div>
+            </div>
           </div>
         ))}
         {isGenerating && (
@@ -83,21 +167,37 @@ export function ChatView() {
         <div ref={messagesEndRef} />
       </div>
 
+      {serverError && (
+        <div style={{
+          padding: '8px 16px',
+          background: 'rgba(239,68,68,0.1)',
+          borderTop: '1px solid rgba(239,68,68,0.3)',
+          fontSize: '13px',
+          color: 'var(--danger)',
+        }}>
+          {serverError}
+        </div>
+      )}
+
       <div className="chat-input-area">
         <div className="chat-input-row">
           <textarea
             className="chat-input"
-            placeholder="Message Gemma 4… (Enter to send, Shift+Enter for new line)"
+            placeholder={
+              modelStatus === 'not_loaded'
+                ? 'Load a model first (Model Manager)…'
+                : 'Message Gemma 4… (Enter to send, Shift+Enter for new line)'
+            }
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             rows={1}
-            disabled={isGenerating}
+            disabled={isGenerating || modelStatus === 'not_loaded'}
           />
           <button
             className="btn btn-primary"
             onClick={handleSend}
-            disabled={!input.trim() || isGenerating}
+            disabled={!input.trim() || isGenerating || modelStatus === 'not_loaded'}
           >
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <line x1="22" y1="2" x2="11" y2="13" />

@@ -14,6 +14,7 @@ sys-info = "0.9"
 num_cpus = "1"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4"] }
+sha2 = "0.10"
 
 [build-dependencies]
 tauri-build = { version = "2" }

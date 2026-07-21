@@ -251,8 +251,9 @@ impl ModelManager {
     }
 
     /// Get the llama.cpp binary path for the current platform
+    /// Prefers CUDA build if available, falls back to CPU
     fn get_llama_binary_path(&self, vault_root: &str) -> PathBuf {
-        let runtime_dir = if cfg!(target_os = "windows") {
+        let base_dir = if cfg!(target_os = "windows") {
             PathBuf::from(vault_root).join("RUNTIMES").join("windows")
         } else if cfg!(target_os = "macos") {
             PathBuf::from(vault_root).join("RUNTIMES").join("macos")
@@ -266,7 +267,20 @@ impl ModelManager {
             "llama-server"
         };
 
-        runtime_dir.join(binary_name)
+        // Prefer CUDA build
+        let cuda_path = base_dir.join("llama-cuda").join(binary_name);
+        if cuda_path.exists() {
+            return cuda_path;
+        }
+
+        // Fall back to CPU build
+        let cpu_path = base_dir.join("llama-cpu").join(binary_name);
+        if cpu_path.exists() {
+            return cpu_path;
+        }
+
+        // Last resort: direct in runtime dir
+        base_dir.join(binary_name)
     }
 
     /// Start llama-server for inference
@@ -391,6 +405,13 @@ pub fn get_model_config() -> ModelConfig {
 
 #[tauri::command]
 pub fn get_model_status() -> String {
-    let manager = ModelManager::new();
-    serde_json::to_string(&manager.get_status()).unwrap_or_else(|_| "\"NOT_LOADED\"".to_string())
+    // Check if llama-server is running by trying to connect to its port
+    if std::net::TcpStream::connect_timeout(
+        &"127.0.0.1:8342".parse().unwrap(),
+        std::time::Duration::from_secs(2),
+    ).is_ok() {
+        "LOADED".to_string()
+    } else {
+        "NOT_LOADED".to_string()
+    }
 }

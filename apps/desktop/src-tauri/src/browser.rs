@@ -1,6 +1,9 @@
 // UnoOne Power — Desktop Browser Workspace
 // Manages Chromium browser instances for PageAgent-based web interaction
 // All browser actions go through SafetyGuard before execution
+//
+// STATUS: Browser workspace structure is defined but Chromium/Playwright
+// integration is not yet wired. Commands return honest "not available" errors.
 
 use serde::{Deserialize, Serialize};
 
@@ -81,159 +84,19 @@ pub struct PageInfo {
     pub load_time_ms: u64,
 }
 
-/// Browser workspace state
-pub struct BrowserWorkspace {
-    config: BrowserConfig,
-    session_active: bool,
-    current_url: String,
-}
-
-impl BrowserWorkspace {
-    pub fn new(config: BrowserConfig) -> Self {
-        Self {
-            config,
-            session_active: false,
-            current_url: String::new(),
-        }
-    }
-
-    /// Start a browser session
-    /// In production, this launches Chromium via Playwright
-    pub fn start_session(&mut self) -> Result<(), String> {
-        // TODO: Launch Chromium process with Playwright
-        // For now, mark as active
-        self.session_active = true;
-        Ok(())
-    }
-
-    /// Stop the browser session
-    pub fn stop_session(&mut self) -> Result<(), String> {
-        self.session_active = false;
-        self.current_url = String::new();
-        Ok(())
-    }
-
-    /// Execute a browser action (after SafetyGuard approval)
-    pub fn execute_action(&mut self, action: &BrowserAction) -> Result<BrowserActionResult, String> {
-        if !self.session_active {
-            return Err("No active browser session".to_string());
-        }
-
-        match action {
-            BrowserAction::Navigate { url } => {
-                self.current_url = url.clone();
-                Ok(BrowserActionResult {
-                    success: true,
-                    data: serde_json::json!({ "url": url, "status": "navigating" }),
-                    error: None,
-                    screenshot_path: None,
-                })
-            }
-            BrowserAction::Click { selector } => {
-                Ok(BrowserActionResult {
-                    success: true,
-                    data: serde_json::json!({ "selector": selector, "action": "clicked" }),
-                    error: None,
-                    screenshot_path: None,
-                })
-            }
-            BrowserAction::Type { selector, text } => {
-                Ok(BrowserActionResult {
-                    success: true,
-                    data: serde_json::json!({ "selector": selector, "text_length": text.len() }),
-                    error: None,
-                    screenshot_path: None,
-                })
-            }
-            BrowserAction::Screenshot => {
-                Ok(BrowserActionResult {
-                    success: true,
-                    data: serde_json::json!({ "screenshot": "placeholder" }),
-                    error: None,
-                    screenshot_path: Some("screenshot_placeholder.png".to_string()),
-                })
-            }
-            BrowserAction::ExtractText { selector } => {
-                Ok(BrowserActionResult {
-                    success: true,
-                    data: serde_json::json!({ "text": "Page text extraction placeholder", "selector": selector }),
-                    error: None,
-                    screenshot_path: None,
-                })
-            }
-            BrowserAction::Scroll { direction, amount } => {
-                Ok(BrowserActionResult {
-                    success: true,
-                    data: serde_json::json!({ "direction": format!("{:?}", direction), "amount": amount }),
-                    error: None,
-                    screenshot_path: None,
-                })
-            }
-            BrowserAction::Wait { milliseconds } => {
-                Ok(BrowserActionResult {
-                    success: true,
-                    data: serde_json::json!({ "waited_ms": milliseconds }),
-                    error: None,
-                    screenshot_path: None,
-                })
-            }
-            BrowserAction::ExecuteScript { script } => {
-                Ok(BrowserActionResult {
-                    success: true,
-                    data: serde_json::json!({ "script_length": script.len() }),
-                    error: None,
-                    screenshot_path: None,
-                })
-            }
-            BrowserAction::GetPageInfo => {
-                Ok(BrowserActionResult {
-                    success: true,
-                    data: serde_json::json!({
-                        "url": &self.current_url,
-                        "title": "Page title placeholder"
-                    }),
-                    error: None,
-                    screenshot_path: None,
-                })
-            }
-            BrowserAction::FillForm { fields } => {
-                Ok(BrowserActionResult {
-                    success: true,
-                    data: serde_json::json!({ "fields_filled": fields.len() }),
-                    error: None,
-                    screenshot_path: None,
-                })
-            }
-        }
-    }
-
-    pub fn is_active(&self) -> bool {
-        self.session_active
-    }
-
-    pub fn get_config(&self) -> &BrowserConfig {
-        &self.config
-    }
-}
-
-// Tauri commands
+// Tauri commands — all return honest "not available" until Playwright is integrated
 
 #[tauri::command]
-pub fn browser_start_session(config: Option<BrowserConfig>) -> Result<String, String> {
-    let cfg = config.unwrap_or_default();
-    let mut workspace = BrowserWorkspace::new(cfg);
-    workspace.start_session()?;
-    Ok("Browser session started".to_string())
+pub fn browser_start_session(_config: Option<BrowserConfig>) -> Result<String, String> {
+    Err("Browser workspace is not yet available. Chromium/Playwright integration is pending.".to_string())
 }
 
 #[tauri::command]
 pub fn browser_stop_session() -> Result<String, String> {
-    let mut workspace = BrowserWorkspace::new(BrowserConfig::default());
-    workspace.stop_session()
+    Err("No active browser session".to_string())
 }
 
 #[tauri::command]
-pub fn browser_execute(action: BrowserAction) -> Result<BrowserActionResult, String> {
-    let mut workspace = BrowserWorkspace::new(BrowserConfig::default());
-    workspace.execute_action(&action)
+pub fn browser_execute(_action: BrowserAction) -> Result<BrowserActionResult, String> {
+    Err("Browser workspace is not yet available. Chromium/Playwright integration is pending.".to_string())
 }

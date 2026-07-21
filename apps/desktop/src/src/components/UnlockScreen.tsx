@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { tauriApi, type VaultInfo } from '../lib/tauri';
 
 interface UnlockScreenProps {
@@ -16,7 +16,7 @@ export function UnlockScreen({ onUnlock }: UnlockScreenProps) {
   const [setupStep, setSetupStep] = useState(0);
   const [recoveryKey, setRecoveryKey] = useState('');
 
-  const handleDetect = async () => {
+  const handleDetect = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
@@ -28,13 +28,13 @@ export function UnlockScreen({ onUnlock }: UnlockScreenProps) {
         setError('No UnoOne Pocket USB drive found. Please connect your drive and try again.');
       }
     } catch (e) {
-      setError(`Detection failed: ${e}`);
+      setError(`Detection failed: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  const handleUnlock = async () => {
+  const handleUnlock = useCallback(async () => {
     if (!password) {
       setError('Enter your password');
       return;
@@ -49,13 +49,13 @@ export function UnlockScreen({ onUnlock }: UnlockScreenProps) {
         setError(result.error || 'Incorrect password');
       }
     } catch (e) {
-      setError(`Unlock failed: ${e}`);
+      setError(`Unlock failed: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setLoading(false);
     }
-  };
+  }, [password, vaultInfo, onUnlock]);
 
-  const handleSetup = async () => {
+  const handleSetup = useCallback(async () => {
     if (!password) {
       setError('Enter a password');
       return;
@@ -79,11 +79,11 @@ export function UnlockScreen({ onUnlock }: UnlockScreenProps) {
         setError(result.error || 'Setup failed');
       }
     } catch (e) {
-      setError(`Setup failed: ${e}`);
+      setError(`Setup failed: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setLoading(false);
     }
-  };
+  }, [password, confirmPassword, profileName]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {

@@ -1,13 +1,5 @@
-import { useState, useEffect } from 'react';
-import { tauriApi, type ModelInfo } from '../lib/tauri';
-
-interface Document {
-  id: string;
-  title: string;
-  document_type: string;
-  file_size_bytes: number;
-  source_platform: string;
-}
+import { useState, useEffect, useCallback } from 'react';
+import { tauriApi, type DocumentMetadata } from '../lib/tauri';
 
 const TYPE_ICONS: Record<string, string> = {
   PDF: '📄',
@@ -29,37 +21,52 @@ function formatFileSize(bytes: number): string {
 }
 
 export function DocumentsView() {
-  const [documents, setDocuments] = useState<Document[]>([]);
+  const [documents, setDocuments] = useState<DocumentMetadata[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  const loadDocuments = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const vaultInfo = await tauriApi.detectVault();
+      if (vaultInfo.detected) {
+        const docs = await tauriApi.listDocuments(vaultInfo.vault_root);
+        setDocuments(docs);
+      } else {
+        setDocuments([]);
+      }
+    } catch {
+      // Tauri not available — show empty
+      setDocuments([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    async function load() {
-      try {
-        const docs = await tauriApi.listModels('D:\\UNOONE');
-        // Placeholder — document listing will use list_documents
-        setDocuments([]);
-      } catch {
-        setDocuments([]);
-      } finally {
-        setLoading(false);
-      }
-    }
-    load();
-  }, []);
+    loadDocuments();
+  }, [loadDocuments]);
+
+  const filteredDocs = searchQuery
+    ? documents.filter(d =>
+        d.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        d.document_type.toLowerCase().includes(searchQuery.toLowerCase())
+      )
+    : documents;
 
   return (
     <div>
       <div className="main-header">
         <h2>Documents</h2>
         <div className="main-header-actions">
-          <button className="btn btn-primary btn-sm">
+          <button className="btn btn-primary btn-sm" onClick={loadDocuments}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-              <polyline points="17 8 12 3 7 8" />
-              <line x1="12" y1="3" x2="12" y2="15" />
+              <polyline points="1 4 1 10 7 10" />
+              <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
             </svg>
-            Import Document
+            Refresh
           </button>
         </div>
       </div>
@@ -83,13 +90,6 @@ export function DocumentsView() {
               outline: 'none',
             }}
           />
-          <button className="btn btn-secondary">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <circle cx="11" cy="11" r="8" />
-              <line x1="21" y1="21" x2="16.65" y2="16.65" />
-            </svg>
-            Search
-          </button>
         </div>
       </div>
 
@@ -98,12 +98,22 @@ export function DocumentsView() {
           <div style={{ display: 'flex', justifyContent: 'center', padding: '48px' }}>
             <span className="spinner" />
           </div>
-        ) : documents.length > 0 ? (
+        ) : error ? (
+          <div className="empty-state">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10" />
+              <line x1="15" y1="9" x2="9" y2="15" />
+              <line x1="9" y1="9" x2="15" y2="15" />
+            </svg>
+            <h3>Error loading documents</h3>
+            <p>{error}</p>
+          </div>
+        ) : filteredDocs.length > 0 ? (
           <div className="memory-grid">
-            {documents.map(doc => (
+            {filteredDocs.map(doc => (
               <div key={doc.id} className="memory-card">
                 <div className="memory-card-type knowledge">
-                  {doc.document_type}
+                  {doc.document_type.toLowerCase()}
                 </div>
                 <div style={{ fontSize: '24px', marginBottom: '8px' }}>
                   {TYPE_ICONS[doc.document_type] || '📄'}
@@ -111,6 +121,7 @@ export function DocumentsView() {
                 <div className="memory-card-title">{doc.title}</div>
                 <div className="memory-card-preview">
                   {formatFileSize(doc.file_size_bytes)} · {doc.source_platform}
+                  {doc.word_count ? ` · ${doc.word_count} words` : ''}
                 </div>
               </div>
             ))}
@@ -129,15 +140,16 @@ export function DocumentsView() {
           </div>
         )}
 
-        {/* Memory search info */}
+        {/* Supported formats info */}
         <div style={{ marginTop: '24px', padding: '16px', background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' }}>
           <h4 style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '8px' }}>
-            🔍 Memory Retrieval
+            📄 Document Processing
           </h4>
           <div style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.6 }}>
-            <p><strong>Search Pipeline:</strong> Query → Embedding → Encrypted Index → Cosine Similarity → Ranked Results</p>
-            <p><strong>Supported formats:</strong> PDF, DOCX, TXT, Markdown, CSV, XLSX, PPTX, Images (OCR), Audio (STT)</p>
-            <p><strong>Encryption:</strong> All embeddings and indexes are encrypted with domain keys from the vault master key</p>
+            <p><strong>Text extraction:</strong> TXT, Markdown — fully supported</p>
+            <p><strong>Pending parsers:</strong> PDF, DOCX, CSV, XLSX, PPTX — coming soon</p>
+            <p><strong>OCR:</strong> Image text extraction — Tesseract integration pending</p>
+            <p><strong>Search:</strong> Text-based search across vault memory files</p>
           </div>
         </div>
       </div>
