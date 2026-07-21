@@ -249,22 +249,28 @@ fn detect_vault() -> Result<VaultInfo, String> {
         }
     }
 
-    // Also check non-removable paths (for development / C: drive)
-    let fallback_paths = if cfg!(target_os = "windows") {
-        vec!["C:\\UNOONE"]
-    } else if cfg!(target_os = "macos") {
-        vec!["/tmp/UNOONE"]
-    } else {
-        vec!["/tmp/UNOONE"]
-    };
+    // NOTE: Production builds MUST NOT fall back to local/development paths.
+    // The C:\UNOONE and /tmp/UNOONE fallbacks are gated behind a compile-time
+    // feature flag "dev-local-vault" to prevent accidental use in production.
+    // Only removable, validated USB volumes are accepted in production builds.
+    #[cfg(feature = "dev-local-vault")]
+    {
+        let fallback_paths = if cfg!(target_os = "windows") {
+            vec!["C:\\UNOONE"]
+        } else if cfg!(target_os = "macos") {
+            vec!["/tmp/UNOONE"]
+        } else {
+            vec!["/tmp/UNOONE"]
+        };
 
-    for path in fallback_paths {
-        if let Ok((vault_root, vault_id)) = validate_vault_root(path) {
-            return Ok(VaultInfo {
-                detected: true,
-                vault_root,
-                vault_id,
-            });
+        for path in fallback_paths {
+            if let Ok((vault_root, vault_id)) = validate_vault_root(path) {
+                return Ok(VaultInfo {
+                    detected: true,
+                    vault_root,
+                    vault_id,
+                });
+            }
         }
     }
 
@@ -293,36 +299,18 @@ fn unlock_vault(password: String, vault_root: String, state: tauri::State<'_, Mu
         });
     }
 
-    // Read the vault ID to verify the vault exists
-    let vault_id_path = std::path::Path::new(&vault_root)
-        .join("VAULT")
-        .join("identity")
-        .join("vault.id");
-
-    if !vault_id_path.exists() {
-        return Ok(VaultUnlockResult {
-            success: false,
-            vault_id: String::new(),
-            error: "Vault not found at specified path".to_string(),
-        });
-    }
-
-    let vault_id = std::fs::read_to_string(&vault_id_path)
-        .map_err(|e| format!("Failed to read vault ID: {}", e))?
-        .trim().to_string();
-
-    // TODO: Implement real Argon2id key derivation + vault decryption verification
-    // This requires integrating the Kotlin/Native vault library or a Rust Argon2id implementation
-    // For now, store the unlocked state so the UI can proceed
-    let mut vault_state = state.lock().map_err(|e| format!("State lock error: {}", e))?;
-    vault_state.unlocked = true;
-    vault_state.vault_id = vault_id.clone();
-    vault_state.vault_root = vault_root.clone();
-
+    // SECURITY BLOCK: Vault encryption is NOT YET IMPLEMENTED.
+    // Until Argon2id key derivation + XChaCha20-Poly1305 encryption is complete,
+    // unlock_vault MUST NOT return success. Any password would be accepted
+    // without verification, which is a critical security vulnerability.
+    // See directive section M and vault-core specification.
     Ok(VaultUnlockResult {
-        success: true,
-        vault_id,
-        error: String::new(),
+        success: false,
+        vault_id: String::new(),
+        error: "NOT_IMPLEMENTED_SECURITY_BLOCK: Vault encryption is not yet implemented. \
+                Unlocking the vault with any password would grant access without authentication. \
+                This function will return success only after Argon2id key derivation and \
+                XChaCha20-Poly1305 vault decryption are implemented and verified.".to_string(),
     })
 }
 
@@ -346,52 +334,24 @@ fn setup_vault(password: String, profile_name: Option<String>, vault_root: Strin
         });
     }
 
-    // Create the vault directory structure (matches manifest.json v1 spec)
-    let vault_dirs = ["APPS/WINDOWS", "APPS/MACOS",
-                      "RUNTIMES/WINDOWS/CUDA", "RUNTIMES/WINDOWS/CPU", "RUNTIMES/WINDOWS/VULKAN",
-                      "RUNTIMES/MACOS/METAL",
-                      "MODELS/MOBILE", "MODELS/DESKTOP/Gemma-12B",
-                      "VAULT/header", "VAULT/records", "VAULT/indexes",
-                      "VAULT/journal", "VAULT/transactions", "VAULT/attachments",
-                      "VAULT/recovery",
-                      "CONFIG", "RECOVERY", "UPDATES", "LOGS"];
-
-    for dir in &vault_dirs {
-        let path = std::path::Path::new(&vault_root).join(dir);
-        std::fs::create_dir_all(&path)
-            .map_err(|e| format!("Failed to create directory {}: {}", dir, e))?;
-    }
-
-    // Generate a new vault ID
-    let vault_id = uuid::Uuid::new_v4().to_string();
-
-    // Write the vault ID file
-    let vault_id_path = std::path::Path::new(&vault_root)
-        .join("VAULT")
-        .join("identity")
-        .join("vault.id");
-    std::fs::write(&vault_id_path, &vault_id)
-        .map_err(|e| format!("Failed to write vault ID: {}", e))?;
-
-    // Write a profile name file if provided
-    if let Some(name) = profile_name {
-        let profile_path = std::path::Path::new(&vault_root)
-            .join("VAULT")
-            .join("identity")
-            .join("profile.txt");
-        std::fs::write(&profile_path, &name)
-            .map_err(|e| format!("Failed to write profile: {}", e))?;
-    }
-
-    // Generate a 12-word recovery key (simplified — production uses BIP-39 wordlist)
-    let recovery_words: Vec<String> = (0..12)
-        .map(|_| uuid::Uuid::new_v4().to_string().split('-').next().unwrap().to_string())
-        .collect();
-    let recovery_key = recovery_words.join(" ");
-
-    // TODO: Implement real Argon2id key derivation + XChaCha20-Poly1305 vault encryption
-    // The password should derive a master key which encrypts a verification blob
-    // For now, the vault structure is created and the ID is written
+    // SECURITY BLOCK: Vault encryption is NOT YET IMPLEMENTED.
+    // Creating a vault without encryption would leave user data unprotected.
+    // Until Argon2id + XChaCha20-Poly1305 is implemented, setup_vault
+    // MUST NOT create a vault that accepts any password as valid.
+    //
+    // Directory structure creation is allowed for development/testing,
+    // but the function MUST NOT report success or return a recovery key
+    // until the vault header is properly encrypted with the user's password.
+    Ok(VaultSetupResult {
+        success: false,
+        vault_id: String::new(),
+        recovery_key: String::new(),
+        error: "NOT_IMPLEMENTED_SECURITY_BLOCK: Vault setup with encryption is not yet implemented. \
+                Creating a vault without Argon2id key derivation and XChaCha20-Poly1305 encryption \
+                would leave user data unprotected. This function will return success only after \
+                proper key wrapping and authenticated vault creation are implemented.".to_string(),
+    })
+}
 
     Ok(VaultSetupResult {
         success: true,
@@ -407,6 +367,9 @@ fn lock_vault(state: tauri::State<'_, Mutex<VaultState>>) -> Result<(), String> 
     vault_state.unlocked = false;
     vault_state.vault_id.clear();
     vault_state.vault_root.clear();
+    // NOTE: This clears in-memory state only. When real encryption is
+    // implemented, this MUST also zero cryptographic keys from memory
+    // and delete any host-side decrypted cache keys.
     Ok(())
 }
 
