@@ -110,6 +110,28 @@ export interface SafetyVerdict {
   modified_parameters: Record<string, unknown> | null;
 }
 
+export interface RecordingBookmark {
+  timestamp_seconds: number;
+  label: string | null;
+}
+
+export interface RecordingSession {
+  id: string;
+  title: string;
+  state: 'IDLE' | 'RECORDING' | 'PAUSED' | 'PROCESSING' | 'STOPPED' | 'ERROR';
+  recording_type: string;
+  privacy_level: string;
+  started_at: string | null;
+  stopped_at: string | null;
+  duration_seconds: number;
+  bookmarks: RecordingBookmark[];
+  source_platform: string;
+  source_device_id: string;
+  audio_path: string | null;
+  transcript_path: string | null;
+  summary_path: string | null;
+}
+
 // Tauri invoke helper — works with @tauri-apps/api or falls back to mock
 async function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   try {
@@ -209,6 +231,30 @@ function mockInvoke(command: string, args?: Record<string, unknown>): unknown {
         risk_level: 'SAFE',
         modified_parameters: null,
       };
+    case 'start_recording':
+      return {
+        id: 'rec-' + Date.now(),
+        title: 'Recording ' + new Date().toLocaleTimeString(),
+        state: 'RECORDING',
+        recording_type: args?.recording_type || 'VOICE_MEMO',
+        privacy_level: args?.privacy_level || 'FULL',
+        started_at: new Date().toISOString(),
+        stopped_at: null,
+        duration_seconds: 0,
+        bookmarks: [],
+        source_platform: 'DESKTOP',
+        source_device_id: 'mock-desktop',
+        audio_path: 'D:\\UNOONE\\VAULT\\recordings\\audio\\rec-' + Date.now() + '.enc',
+        transcript_path: null,
+        summary_path: null,
+      };
+    case 'pause_recording':
+    case 'resume_recording':
+      return { ...mockInvoke('start_recording', args), state: command === 'pause_recording' ? 'PAUSED' : 'RECORDING' };
+    case 'stop_recording':
+      return { ...mockInvoke('start_recording', args), state: 'PROCESSING' };
+    case 'add_bookmark':
+      return { ...mockInvoke('start_recording', args), bookmarks: [{ timestamp_seconds: 30, label: args?.label || null }] };
     default:
       return null;
   }
@@ -236,4 +282,12 @@ export const tauriApi = {
   setSecurityLevel: (level: SecurityLevel) => invoke<string>('set_security_level', { level }),
   reviewToolAction: (action: ToolAction, securityLevel: SecurityLevel) =>
     invoke<SafetyVerdict>('review_tool_action', { action, security_level: securityLevel }),
+
+  // Recording
+  startRecording: (recordingType: string, privacyLevel: string, vaultRoot: string) =>
+    invoke<RecordingSession>('start_recording', { recording_type: recordingType, privacy_level: privacyLevel, vault_root: vaultRoot }),
+  pauseRecording: () => invoke<RecordingSession>('pause_recording'),
+  resumeRecording: () => invoke<RecordingSession>('resume_recording'),
+  stopRecording: () => invoke<RecordingSession>('stop_recording'),
+  addBookmark: (label: string | null) => invoke<RecordingSession>('add_bookmark', { label }),
 };

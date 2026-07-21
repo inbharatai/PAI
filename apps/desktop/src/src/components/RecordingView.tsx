@@ -1,21 +1,45 @@
 import { useState, useEffect, useRef } from 'react';
 
+type RecordingType = 'VOICE_MEMO' | 'MEETING' | 'LECTURE' | 'INTERVIEW' | 'NOTE';
+type PrivacyLevel = 'FULL' | 'TRANSCRIPT_ONLY' | 'SUMMARY_ONLY' | 'PRIVATE_SESSION';
+
 interface Recording {
   id: string;
   title: string;
   date: string;
   duration: string;
   status: 'draft' | 'transcribed' | 'summarized';
+  type: RecordingType;
+  privacy: PrivacyLevel;
 }
+
+const RECORDING_TYPE_LABELS: Record<RecordingType, string> = {
+  VOICE_MEMO: 'Voice Memo',
+  MEETING: 'Meeting',
+  LECTURE: 'Lecture',
+  INTERVIEW: 'Interview',
+  NOTE: 'Quick Note',
+};
+
+const PRIVACY_LABELS: Record<PrivacyLevel, string> = {
+  FULL: 'Full (audio + transcript + summary)',
+  TRANSCRIPT_ONLY: 'Transcript Only (no audio saved)',
+  SUMMARY_ONLY: 'Summary Only (no audio/transcript saved)',
+  PRIVATE_SESSION: 'Private Session (nothing saved)',
+};
 
 export function RecordingView() {
   const [isRecording, setIsRecording] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [recordings, setRecordings] = useState<Recording[]>([]);
+  const [recordingType, setRecordingType] = useState<RecordingType>('VOICE_MEMO');
+  const [privacyLevel, setPrivacyLevel] = useState<PrivacyLevel>('FULL');
+  const [bookmarks, setBookmarks] = useState<number>(0);
   const timerRef = useRef<number | null>(null);
 
   useEffect(() => {
-    if (isRecording) {
+    if (isRecording && !isPaused) {
       timerRef.current = window.setInterval(() => {
         setElapsed(prev => prev + 1);
       }, 1000);
@@ -28,7 +52,7 @@ export function RecordingView() {
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, [isRecording]);
+  }, [isRecording, isPaused]);
 
   const formatTime = (seconds: number): string => {
     const h = Math.floor(seconds / 3600);
@@ -41,22 +65,42 @@ export function RecordingView() {
     if (isRecording) {
       // Stop recording
       setIsRecording(false);
+      setIsPaused(false);
       setRecordings(prev => [
         {
           id: Date.now().toString(),
-          title: `Recording ${prev.length + 1}`,
+          title: `${RECORDING_TYPE_LABELS[recordingType]} — ${new Date().toLocaleTimeString()}`,
           date: new Date().toLocaleDateString(),
           duration: formatTime(elapsed),
           status: 'draft',
+          type: recordingType,
+          privacy: privacyLevel,
         },
         ...prev,
       ]);
       setElapsed(0);
+      setBookmarks(0);
     } else {
       // Start recording
       setElapsed(0);
+      setBookmarks(0);
       setIsRecording(true);
     }
+  };
+
+  const handlePause = () => {
+    setIsPaused(!isPaused);
+  };
+
+  const handleBookmark = () => {
+    setBookmarks(prev => prev + 1);
+  };
+
+  const handleCancel = () => {
+    setIsRecording(false);
+    setIsPaused(false);
+    setElapsed(0);
+    setBookmarks(0);
   };
 
   return (
@@ -75,7 +119,30 @@ export function RecordingView() {
         </div>
       </div>
 
-      <div className="main-body" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '24px', paddingTop: '48px' }}>
+      <div className="main-body" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '24px', paddingTop: '24px' }}>
+        {/* Recording type and privacy selectors */}
+        {!isRecording && (
+          <div style={{ display: 'flex', gap: '12px', width: '100%', maxWidth: '600px' }}>
+            <div className="input-group" style={{ flex: 1 }}>
+              <label>Type</label>
+              <select value={recordingType} onChange={e => setRecordingType(e.target.value as RecordingType)}>
+                {Object.entries(RECORDING_TYPE_LABELS).map(([key, label]) => (
+                  <option key={key} value={key}>{label}</option>
+                ))}
+              </select>
+            </div>
+            <div className="input-group" style={{ flex: 1 }}>
+              <label>Privacy</label>
+              <select value={privacyLevel} onChange={e => setPrivacyLevel(e.target.value as PrivacyLevel)}>
+                {Object.entries(PRIVACY_LABELS).map(([key, label]) => (
+                  <option key={key} value={key}>{label}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+        )}
+
+        {/* Recording controls */}
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px' }}>
           <button
             className={`record-btn ${isRecording ? 'recording' : ''}`}
@@ -89,25 +156,58 @@ export function RecordingView() {
             {isRecording ? formatTime(elapsed) : '00:00:00'}
           </div>
 
+          {isRecording && bookmarks > 0 && (
+            <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+              🔖 {bookmarks} bookmark{bookmarks !== 1 ? 's' : ''}
+            </div>
+          )}
+
           <p style={{ color: 'var(--text-muted)', fontSize: '13px' }}>
-            {isRecording ? 'Recording… tap to stop' : 'Tap to start recording'}
+            {isRecording ? (isPaused ? 'Paused — tap resume to continue' : 'Recording…') : 'Tap to start recording'}
           </p>
 
           {isRecording && (
             <div style={{ display: 'flex', gap: '8px' }}>
-              <button className="btn btn-secondary btn-sm" onClick={() => {}}>
+              <button className="btn btn-secondary btn-sm" onClick={handlePause}>
+                {isPaused ? (
+                  <>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <polygon points="5 3 19 12 5 21 5 3" />
+                    </svg>
+                    Resume
+                  </>
+                ) : (
+                  <>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <rect x="6" y="4" width="4" height="16" />
+                      <rect x="14" y="4" width="4" height="16" />
+                    </svg>
+                    Pause
+                  </>
+                )}
+              </button>
+              <button className="btn btn-secondary btn-sm" onClick={handleBookmark}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M10 9H6V5" /><path d="M14 5h4v4" />
-                  <path d="M14 9l6-6" /><path d="M6 19l6-6" />
+                  <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
                 </svg>
                 Bookmark
               </button>
-              <button className="btn btn-danger btn-sm" onClick={() => { setIsRecording(false); setElapsed(0); }}>
+              <button className="btn btn-danger btn-sm" onClick={handleCancel}>
                 Cancel
               </button>
             </div>
           )}
         </div>
+
+        {/* Recording info during recording */}
+        {isRecording && (
+          <div style={{ padding: '12px 16px', background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)', fontSize: '12px', color: 'var(--text-secondary)', width: '100%', maxWidth: '600px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <span>Type: {RECORDING_TYPE_LABELS[recordingType]}</span>
+              <span>Privacy: {privacyLevel}</span>
+            </div>
+          </div>
+        )}
 
         {recordings.length > 0 && (
           <div style={{ width: '100%', maxWidth: '600px' }}>
@@ -124,7 +224,9 @@ export function RecordingView() {
                   </div>
                   <div className="recording-item-info">
                     <div className="recording-item-title">{rec.title}</div>
-                    <div className="recording-item-meta">{rec.date} · {rec.status}</div>
+                    <div className="recording-item-meta">
+                      {rec.date} · {RECORDING_TYPE_LABELS[rec.type]} · {rec.status}
+                    </div>
                   </div>
                   <div className="recording-item-duration">{rec.duration}</div>
                 </div>
@@ -145,6 +247,19 @@ export function RecordingView() {
             <p>Tap the record button to start capturing audio. All recordings are encrypted and saved to your Pocket USB.</p>
           </div>
         )}
+
+        {/* STT/TTS info */}
+        <div style={{ padding: '16px', background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', width: '100%', maxWidth: '600px' }}>
+          <h4 style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '8px' }}>
+            🎙️ Speech Processing Pipeline
+          </h4>
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.6 }}>
+            <p><strong>STT:</strong> Whisper (tiny/base) — offline, on-device transcription</p>
+            <p><strong>TTS:</strong> Piper/MMS — offline, multi-language synthesis</p>
+            <p><strong>Summarization:</strong> Gemma 4 12B — intelligent summarization of transcripts</p>
+            <p style={{ marginTop: '8px', color: 'var(--accent)' }}>Pipeline: Audio → Encrypted chunks → Vault → STT → Transcript → LLM → Summary → Vault</p>
+          </div>
+        </div>
       </div>
     </div>
   );

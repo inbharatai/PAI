@@ -3,6 +3,7 @@
 
 mod llama;
 mod safety;
+mod recording;
 
 fn main() {
     tauri::Builder::default()
@@ -24,6 +25,12 @@ fn main() {
             safety::get_security_level,
             safety::set_security_level,
             safety::review_tool_action,
+            // Recording
+            recording::start_recording,
+            recording::pause_recording,
+            recording::resume_recording,
+            recording::stop_recording,
+            recording::add_bookmark,
         ])
         .run(tauri::generate_context!())
         .expect("error while running UnoOne Power");
