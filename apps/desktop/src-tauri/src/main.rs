@@ -6,6 +6,7 @@ mod safety;
 mod recording;
 mod browser;
 mod documents;
+mod accessibility;
 
 fn main() {
     tauri::Builder::default()
@@ -41,6 +42,11 @@ fn main() {
             documents::list_documents,
             documents::process_document,
             documents::search_memories,
+            // Accessibility
+            accessibility::get_accessibility_status,
+            accessibility::perform_ocr,
+            accessibility::describe_image,
+            accessibility::get_camera_info,
         ])
         .run(tauri::generate_context!())
         .expect("error while running UnoOne Power");

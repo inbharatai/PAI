@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { tauriApi, type VaultStatus } from '../lib/tauri';
 
-export type ViewId = 'chat' | 'recordings' | 'memory' | 'vault' | 'model' | 'browser' | 'documents' | 'settings' | 'hardware';
+export type ViewId = 'chat' | 'recordings' | 'memory' | 'vault' | 'model' | 'browser' | 'documents' | 'accessibility' | 'settings' | 'hardware';
 
 interface SidebarProps {
   currentView: ViewId;
@@ -90,6 +90,19 @@ export function Sidebar({ currentView, onNavigate, onLock }: SidebarProps) {
           <polyline points="14 2 14 8 20 8" />
           <line x1="16" y1="13" x2="8" y2="13" />
           <line x1="16" y1="17" x2="8" y2="17" />
+        </svg>
+      ),
+    },
+    {
+      id: 'accessibility',
+      label: 'Accessibility',
+      icon: (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="10" />
+          <path d="M12 8a2 2 0 1 0 0-4 2 2 0 0 0 0 4z" />
+          <path d="M12 8v4" />
+          <path d="M9 18l3-6 3 6" />
+          <path d="M7 13h10" />
         </svg>
       ),
     },

@@ -10,6 +10,7 @@ import { HardwareProfile } from './components/HardwareProfile';
 import { ModelManager } from './components/ModelManager';
 import { BrowserWorkspace } from './components/BrowserWorkspace';
 import { DocumentsView } from './components/DocumentsView';
+import { AccessibilityView } from './components/AccessibilityView';
 
 type AppScreen = 'unlock' | 'main';
 
@@ -71,6 +72,8 @@ function App() {
         return <BrowserWorkspace />;
       case 'documents':
         return <DocumentsView />;
+      case 'accessibility':
+        return <AccessibilityView />;
       case 'hardware':
         return <HardwareProfile />;
       case 'settings':
