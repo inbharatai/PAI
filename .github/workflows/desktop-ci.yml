@@ -2,7 +2,7 @@ name: Desktop CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, desktop/production-foundation ]
     paths:
       - 'apps/desktop/**'
       - 'packages/**'
@@ -13,6 +13,7 @@ on:
       - 'apps/desktop/**'
       - 'packages/**'
       - '.github/workflows/desktop-ci.yml'
+  workflow_dispatch:
 
 concurrency:
   group: desktop-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
