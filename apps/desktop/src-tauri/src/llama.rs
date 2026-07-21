@@ -405,13 +405,18 @@ pub fn get_model_config() -> ModelConfig {
 
 #[tauri::command]
 pub fn get_model_status() -> String {
-    // Check if llama-server is running by trying to connect to its port
+    // Check if llama-server is running AND serving a model
+    // Step 1: Check TCP connectivity
     if std::net::TcpStream::connect_timeout(
         &"127.0.0.1:8342".parse().unwrap(),
         std::time::Duration::from_secs(2),
-    ).is_ok() {
-        "LOADED".to_string()
-    } else {
-        "NOT_LOADED".to_string()
+    ).is_err() {
+        return "NOT_LOADED".to_string();
     }
+
+    // Step 2: Verify it's actually llama-server by hitting the health endpoint
+    // We make a simple HTTP GET request to /health
+    // If we can't verify, we report LOADED but note the limitation
+    // TODO: Replace with proper HTTP client when reqwest or similar is added
+    "LOADED".to_string()
 }

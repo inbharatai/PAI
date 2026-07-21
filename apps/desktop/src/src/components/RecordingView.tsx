@@ -37,7 +37,7 @@ export function RecordingView() {
   const [recordingType, setRecordingType] = useState<RecordingType>('VOICE_MEMO');
   const [privacyLevel, setPrivacyLevel] = useState<PrivacyLevel>('FULL');
   const [bookmarks, setBookmarks] = useState<number>(0);
-  const [vaultRoot, setVaultRoot] = useState('D:\\UNOONE');
+  const [vaultRoot, setVaultRoot] = useState('');
   const [error, setError] = useState('');
   const timerRef = useRef<number | null>(null);
 
@@ -83,11 +83,12 @@ export function RecordingView() {
   const handleRecord = async () => {
     setError('');
     if (isRecording) {
-      // Stop recording via Tauri API
+      // Stop recording via Tauri API — must succeed to save
       try {
         await tauriApi.stopRecording();
-      } catch {
-        // If Tauri not available, still update UI
+      } catch (e) {
+        setError(`Failed to stop recording: ${e instanceof Error ? e.message : String(e)}`);
+        return; // Do NOT update UI if backend failed
       }
       setIsRecording(false);
       setIsPaused(false);
@@ -106,18 +107,15 @@ export function RecordingView() {
       setElapsed(0);
       setBookmarks(0);
     } else {
-      // Start recording via Tauri API
+      // Start recording — must succeed to enter recording state
       try {
         await tauriApi.startRecording(recordingType, privacyLevel, vaultRoot);
         setIsRecording(true);
         setElapsed(0);
         setBookmarks(0);
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
-        // Still allow UI recording even if Tauri is not available (for development)
-        setIsRecording(true);
-        setElapsed(0);
-        setBookmarks(0);
+        setError(`Failed to start recording: ${e instanceof Error ? e.message : String(e)}`);
+        // Do NOT enter recording state if backend failed
       }
     }
   };
@@ -127,22 +125,28 @@ export function RecordingView() {
     if (isPaused) {
       try {
         await tauriApi.resumeRecording();
-      } catch {}
-      setIsPaused(false);
+        setIsPaused(false);
+      } catch (e) {
+        setError(`Failed to resume: ${e instanceof Error ? e.message : String(e)}`);
+      }
     } else {
       try {
         await tauriApi.pauseRecording();
-      } catch {}
-      setIsPaused(true);
+        setIsPaused(true);
+      } catch (e) {
+        setError(`Failed to pause: ${e instanceof Error ? e.message : String(e)}`);
+      }
     }
   };
 
   const handleBookmark = async () => {
     setError('');
-    setBookmarks(prev => prev + 1);
     try {
       await tauriApi.addBookmark(null);
-    } catch {}
+      setBookmarks(prev => prev + 1);
+    } catch (e) {
+      setError(`Failed to add bookmark: ${e instanceof Error ? e.message : String(e)}`);
+    }
   };
 
   const handleCancel = () => {

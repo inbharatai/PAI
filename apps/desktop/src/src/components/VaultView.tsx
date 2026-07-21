@@ -38,9 +38,8 @@ export function VaultView() {
       if (vaultInfo.detected) {
         const counts: Record<string, number> = {};
         for (const domain of VAULT_DOMAINS) {
-          // Use list_documents to get real counts from the Rust backend
           try {
-            const docs = await tauriApi.listModels(vaultInfo.vault_root);
+            const docs = await tauriApi.listDocuments(vaultInfo.vault_root);
             counts[domain.path] = docs.length;
           } catch {
             counts[domain.path] = 0;
@@ -83,7 +82,11 @@ export function VaultView() {
             Refresh
           </button>
           <button className="btn btn-danger btn-sm" onClick={async () => {
-            try { await tauriApi.lockVault(); } catch {}
+            try {
+              await tauriApi.lockVault();
+            } catch (e) {
+              setError(`Emergency lock failed: ${e instanceof Error ? e.message : String(e)}`);
+            }
           }}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
