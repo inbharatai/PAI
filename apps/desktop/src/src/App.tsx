@@ -8,6 +8,7 @@ import { VaultView } from './components/VaultView';
 import { SettingsView } from './components/SettingsView';
 import { HardwareProfile } from './components/HardwareProfile';
 import { ModelManager } from './components/ModelManager';
+import { BrowserWorkspace } from './components/BrowserWorkspace';
 
 type AppScreen = 'unlock' | 'main';
 
@@ -65,6 +66,8 @@ function App() {
         return <VaultView />;
       case 'model':
         return <ModelManager />;
+      case 'browser':
+        return <BrowserWorkspace />;
       case 'hardware':
         return <HardwareProfile />;
       case 'settings':
