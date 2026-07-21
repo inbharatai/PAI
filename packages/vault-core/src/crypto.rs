@@ -11,7 +11,7 @@
 
 use argon2::{Algorithm, Argon2, Params, Version};
 use chacha20poly1305::{
-    aead::{Aead, KeyInit},
+    aead::{Aead, KeyInit, Payload},
     XChaCha20Poly1305, XNonce,
 };
 use hkdf::Hkdf;
@@ -85,8 +85,12 @@ pub fn encrypt(
         .map_err(|e| VaultError::EncryptionFailed(format!("Invalid key: {}", e)))?;
 
     let xnonce = XNonce::from_slice(nonce);
+    let payload = Payload {
+        msg: plaintext,
+        aad,
+    };
     cipher
-        .encrypt(xnonce, (plaintext, aad))
+        .encrypt(xnonce, payload)
         .map_err(|e| VaultError::EncryptionFailed(format!("Encryption failed: {}", e)))
 }
 
@@ -104,8 +108,12 @@ pub fn decrypt(
         .map_err(|e| VaultError::DecryptionFailed(format!("Invalid key: {}", e)))?;
 
     let xnonce = XNonce::from_slice(nonce);
+    let payload = Payload {
+        msg: ciphertext,
+        aad,
+    };
     cipher
-        .decrypt(xnonce, (ciphertext, aad))
+        .decrypt(xnonce, payload)
         .map_err(|e| VaultError::DecryptionFailed(format!("Decryption failed (wrong password or tampered data): {}", e)))
 }
 
@@ -192,7 +200,7 @@ pub fn hmac_sha256(key: &[u8], data: &[u8]) -> [u8; 32] {
     use hmac::Mac;
     type HmacSha256 = Hmac<Sha256>;
 
-    let mut mac = HmacSha256::new_from_slice(key).expect("HMAC key length is valid");
+    let mut mac = <HmacSha256 as Mac>::new_from_slice(key).expect("HMAC key length is valid");
     mac.update(data);
     mac.finalize().into_bytes().into()
 }

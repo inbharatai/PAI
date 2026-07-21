@@ -116,7 +116,7 @@ impl Vault {
         secure_zero(&mut key_to_zero);
 
         Ok(VaultCreateResult {
-            recovery_phrase: recovery_phrase.words,
+            recovery_phrase: recovery_phrase.words.clone(),
             vault_id,
         })
     }
