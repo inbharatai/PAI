@@ -203,7 +203,7 @@ impl BitIterator {
 
 /// Get the word list (full BIP-39 English word list)
 fn get_word_list() -> &'static [&'static str] {
-    &crate::b39_words::BIP39_ENGLISH
+    &crate::bip39_words::BIP39_ENGLISH
 }
 
 #[cfg(test)]

@@ -7,7 +7,7 @@
 // It must produce byte-identical results to the Kotlin encrypted-vault
 // package for cross-platform vault compatibility.
 
-pub mod b39_words;
+pub mod bip39_words;
 pub mod crypto;
 pub mod error;
 pub mod header;
