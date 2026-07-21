@@ -358,10 +358,14 @@ mod tests {
             },
         ]).unwrap();
 
+        // Explicitly roll back the transaction
         journal.rollback_transaction(&tx_id).unwrap();
 
+        // After explicit rollback, recover_from_crash cleans up rolled-back entries
+        // but doesn't count them in rolled_back_count (they were already rolled back)
         let result = journal.recover_from_crash().unwrap();
-        assert!(result.rolled_back_count >= 1);
+        assert_eq!(result.rolled_back_count, 0);
+        assert!(result.errors.is_empty());
     }
 
     #[test]

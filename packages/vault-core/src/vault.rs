@@ -407,15 +407,20 @@ impl Vault {
     }
 
     /// Delete a record by creating a tombstone
+    /// The tombstone overwrites the original record file so that read_record
+    /// will find the tombstone instead of the original data.
     pub fn delete_record(&mut self, record_id: &str, origin_platform: &str, origin_device_id: &str) -> Result<(), VaultError> {
         if !self.is_unlocked() {
             return Err(VaultError::VaultLocked);
         }
 
-        // Create tombstone record
-        let tombstone = Record::create_tombstone(record_id, origin_platform, origin_device_id);
+        // Create tombstone record — it references the original record_id as parent
+        let mut tombstone = Record::create_tombstone(record_id, origin_platform, origin_device_id);
 
-        // Write tombstone (overwrites the original record)
+        // Override the record_id to match the original so the file overwrites it
+        tombstone.record_id = record_id.to_string();
+
+        // Write tombstone (overwrites the original record file)
         self.write_record(tombstone, b"DELETED")?;
 
         Ok(())
