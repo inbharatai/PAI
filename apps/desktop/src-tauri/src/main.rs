@@ -5,6 +5,7 @@ mod llama;
 mod safety;
 mod recording;
 mod browser;
+mod documents;
 
 fn main() {
     tauri::Builder::default()
@@ -36,6 +37,10 @@ fn main() {
             browser::browser_start_session,
             browser::browser_stop_session,
             browser::browser_execute,
+            // Documents and memory
+            documents::list_documents,
+            documents::process_document,
+            documents::search_memories,
         ])
         .run(tauri::generate_context!())
         .expect("error while running UnoOne Power");
