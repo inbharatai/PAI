@@ -30,26 +30,29 @@ class DeterministicIntentRouterTest {
     }
 
     // ── Language commands ───────────────────────────────────────────────
+    // Language switching is handled by RuleBasedParser / VoiceModule, NOT by
+    // DeterministicIntentRouter. Language commands must fall through so the
+    // orchestrator can call VoiceModule.reinitForLanguage().
 
     @Test
-    fun languageSwitchEnglish_returnsMatched() {
+    fun languageSwitchEnglish_returnsNoMatch() {
         val result = DeterministicIntentRouter.route("speak in english")
-        assertTrue(result is DeterministicIntentRouter.DeterministicResult.Matched)
-        val matched = result as DeterministicIntentRouter.DeterministicResult.Matched
-        assertEquals("speak_response", matched.call.tool)
-        assertEquals("LANGUAGE_SWITCH", matched.intent)
+        assertTrue("Language commands should fall through to orchestrator",
+            result is DeterministicIntentRouter.DeterministicResult.NoMatch)
     }
 
     @Test
-    fun languageSwitchHindi_returnsMatched() {
+    fun languageSwitchHindi_returnsNoMatch() {
         val result = DeterministicIntentRouter.route("hindi mein bolo")
-        assertTrue(result is DeterministicIntentRouter.DeterministicResult.Matched)
+        assertTrue("Language commands should fall through to orchestrator",
+            result is DeterministicIntentRouter.DeterministicResult.NoMatch)
     }
 
     @Test
-    fun languageSwitchInHindi_returnsMatched() {
+    fun languageSwitchInHindi_returnsNoMatch() {
         val result = DeterministicIntentRouter.route("हिंदी में बोलो")
-        assertTrue(result is DeterministicIntentRouter.DeterministicResult.Matched)
+        assertTrue("Language commands should fall through to orchestrator",
+            result is DeterministicIntentRouter.DeterministicResult.NoMatch)
     }
 
     // ── Blind mode commands ─────────────────────────────────────────────

@@ -218,7 +218,8 @@ class ActionExecutor(
                     when (direction) {
                         "up" -> accessibilityControl.scrollUp().map { "Scrolled up" }
                         "down" -> accessibilityControl.scrollDown().map { "Scrolled down" }
-                        else -> Result.Error("Unknown scroll direction: $direction. Use 'up' or 'down'.")
+                        "left", "right" -> accessibilityControl.swipe(direction).map { "Scrolled $direction" }
+                        else -> Result.Error("Unknown scroll direction: $direction. Use 'up', 'down', 'left', or 'right'.")
                     }
                 }
                 "click_accessibility_node" -> {

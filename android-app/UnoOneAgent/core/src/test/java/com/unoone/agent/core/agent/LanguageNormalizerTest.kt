@@ -65,7 +65,9 @@ class LanguageNormalizerTest {
 
     @Test
     fun detectBengali_romanized() {
-        val result = LanguageNormalizer.normalize("ami note dekhte chai", 0.7f)
+        // Requires >=2 Bengali keywords to avoid false positives (e.g. Hindi "ki").
+        // "ami" and "koro" are both Bengali keywords, satisfying the threshold.
+        val result = LanguageNormalizer.normalize("ami koro note dekhte chai", 0.7f)
         assertEquals("bn", result.detectedLanguage)
     }
 
@@ -86,7 +88,8 @@ class LanguageNormalizerTest {
     @Test
     fun replyLanguage_bengali_fallsBackToEnglish() {
         // Bengali is a constrained generation language → model should reply in English
-        val result = LanguageNormalizer.normalize("ami note dekhte chai", 0.7f)
+        // Uses >=2 Bengali keywords ("ami" + "koro") to meet the minKeywordCount threshold.
+        val result = LanguageNormalizer.normalize("ami koro note dekhte chai", 0.7f)
         assertEquals("bn", result.detectedLanguage)
         assertEquals("en", result.expectedReplyLanguage)
     }
@@ -219,5 +222,49 @@ class LanguageNormalizerTest {
     @Test
     fun threshold_isExactlyPointFive() {
         assertEquals(0.5f, LanguageNormalizer.CONFIDENCE_THRESHOLD, 0.001f)
+    }
+
+    // ── M5: Bengali "ki" false-positive ────────────────────────────────────
+
+    @Test
+    fun hindiKi_doesNotTriggerBengali() {
+        // Hindi "ki" (meaning "that") should NOT classify input as Bengali.
+        // With the minKeywordCount threshold, a single ambiguous word won't trigger Bengali.
+        val result = LanguageNormalizer.normalize("mujhe batao ki Rahul kahan hai", 0.8f)
+        assertEquals("Hindi 'ki' should not trigger Bengali detection", "hi", result.detectedLanguage)
+    }
+
+    @Test
+    fun singleBengaliWord_doesNotTriggerBengali() {
+        // A single Bengali keyword ("ami") alone should not meet the >=2 threshold.
+        val result = LanguageNormalizer.normalize("ami wants to go there", 0.7f)
+        assertTrue("Single Bengali keyword should not trigger Bengali detection",
+            result.detectedLanguage != "bn")
+    }
+
+    // ── M4: Filler words "like" and "actually" preserved ──────────────────
+
+    @Test
+    fun fillerWord_like_isPreserved() {
+        // "like" carries meaning ("open something like WhatsApp") and must NOT be stripped.
+        val result = LanguageNormalizer.normalize("open something like WhatsApp", 0.9f)
+        assertTrue("'like' should be preserved in transcript",
+            result.normalisedTranscript.contains("like"))
+    }
+
+    @Test
+    fun fillerWord_actually_isPreserved() {
+        // "actually" carries emphasis and must NOT be stripped.
+        val result = LanguageNormalizer.normalize("actually open calendar", 0.9f)
+        assertTrue("'actually' should be preserved in transcript",
+            result.normalisedTranscript.contains("actually"))
+    }
+
+    @Test
+    fun fillerWord_um_isStillRemoved() {
+        // True filler sounds like "um" should still be removed.
+        val result = LanguageNormalizer.normalize("um open whatsapp", 0.9f)
+        assertFalse("'um' should be removed from transcript",
+            result.normalisedTranscript.contains("um"))
     }
 }

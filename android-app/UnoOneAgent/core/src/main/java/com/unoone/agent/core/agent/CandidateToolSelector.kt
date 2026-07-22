@@ -51,9 +51,10 @@ object CandidateToolSelector {
 
     /**
      * The "always included" tools that are useful in almost any agent task.
-     * These are added to every candidate set unless the intent is CHAT (no tools).
+     * Delegates to [CanonicalToolRegistry.ALWAYS_INCLUDED] so the single source of truth
+     * is [CanonicalToolRegistry]. Added to every candidate set unless the intent is CHAT (no tools).
      */
-    private val ALWAYS_INCLUDED: List<String> = listOf("speak_response")
+    private val ALWAYS_INCLUDED: List<String> = CanonicalToolRegistry.ALWAYS_INCLUDED.toList()
 
     /**
      * Tool sets by intent. Each intent maps to the tools the model might need,

@@ -9,7 +9,6 @@ import kotlinx.serialization.json.JsonPrimitive
  *
  * Deterministic routing handles commands that don't need model reasoning:
  * - Wake commands ("uno on", "uno start", "listen")
- * - Language commands ("hindi mein bolo", "speak in english")
  * - Blind mode commands ("start blind", "stop blind")
  * - Simple app launches ("open whatsapp", "open gmail")
  * - Accessibility shortcuts ("go home", "go back", "read screen", "scroll down")
@@ -57,9 +56,11 @@ object DeterministicIntentRouter {
             return DeterministicResult.NoMatch // Wake is handled by the voice layer, not tools
         }
 
-        // ── Language commands ───────────────────────────────────────────────
-        val langResult = routeLanguageCommand(lower)
-        if (langResult != null) return langResult
+        // ── Language commands are NOT handled here ──────────────────────────
+        // Language switching is handled by RuleBasedParser which calls
+        // VoiceModule.reinitForLanguage(). Returning a speak_response here
+        // would claim the language switch was done without actually reconfiguring
+        // STT/TTS, so language commands must fall through to the orchestrator.
 
         // ── Blind mode commands ─────────────────────────────────────────────
         val blindResult = routeBlindModeCommand(lower)
@@ -91,47 +92,11 @@ object DeterministicIntentRouter {
     private fun isWakeCommand(lower: String): Boolean =
         WAKE_PHRASES.any { lower == it || lower.startsWith("$it ") && !lower.contains(" and ") && !lower.contains(" message ") }
 
-    // ── Language commands ────────────────────────────────────────────────
-
-    private val LANGUAGE_COMMANDS = mapOf(
-        "speak in english" to "en",
-        "answer in english" to "en",
-        "in english" to "en",
-        "speak in hindi" to "hi",
-        "hindi mein bolo" to "hi",
-        "हिंदी में बोलो" to "hi",
-        "speak in tamil" to "ta",
-        "speak in bengali" to "bn",
-        "speak in telugu" to "te",
-        "speak in kannada" to "kn",
-        "speak in malayalam" to "ml"
-    )
-
-    /** Localized acknowledgment messages for language switches. */
-    private val LANGUAGE_ACKNOWLEDGMENTS = mapOf(
-        "en" to "Switched to English.",
-        "hi" to "हिंदी में बोलना शुरू करता हूं।",
-        "ta" to "தமிழில் பேசுகிறேன்.",
-        "bn" to "বাংলায় বলছি.",
-        "te" to "తెలుగులో మాట్లాడుతున్నాను.",
-        "kn" to "ಕನ್ನಡದಲ್ಲಿ ಮಾತನಾಡುತ್ತೇನೆ.",
-        "ml" to "മലയാളത്തിൽ സംസാരിക്കുന്നു."
-    )
-
-    private fun routeLanguageCommand(lower: String): DeterministicResult? {
-        for ((phrase, lang) in LANGUAGE_COMMANDS) {
-            if (lower.contains(phrase)) {
-                val acknowledgment = LANGUAGE_ACKNOWLEDGMENTS[lang] ?: "Language switched to $lang."
-                return DeterministicResult.Matched(
-                    call = ToolCall("speak_response", JsonObject(mapOf(
-                        "text" to JsonPrimitive(acknowledgment)
-                    ))),
-                    intent = "LANGUAGE_SWITCH"
-                )
-            }
-        }
-        return null
-    }
+    // ── Language commands are handled by RuleBasedParser / VoiceModule ───
+    // Removed from DeterministicIntentRouter because returning a speak_response
+    // here did not actually reconfigure STT/TTS. Language switching must go
+    // through the orchestrator's voice-language handling path which calls
+    // VoiceModule.reinitForLanguage().
 
     // ── Blind mode commands ──────────────────────────────────────────────
 
@@ -164,19 +129,20 @@ object DeterministicIntentRouter {
 
     // ── App launches ────────────────────────────────────────────────────
 
+    /** App launch phrases mapped to (packageName, friendlyName). */
     private val APP_LAUNCHES = mapOf(
-        "open whatsapp" to "com.whatsapp",
-        "open gmail" to "com.google.android.gm",
-        "open google" to "com.google.android.googlequicksearchbox",
-        "open maps" to "com.google.android.apps.maps",
-        "open youtube" to "com.google.android.youtube",
-        "open calendar" to "com.google.android.calendar",
-        "open chrome" to "com.android.chrome",
-        "open settings" to "com.android.settings",
-        "open camera" to "com.android.camera",
-        "open phone" to "com.google.android.dialer",
-        "open play store" to "com.android.vending",
-        "open clock" to "com.google.android.deskclock"
+        "open whatsapp" to ("com.whatsapp" to "WhatsApp"),
+        "open gmail" to ("com.google.android.gm" to "Gmail"),
+        "open google" to ("com.google.android.googlequicksearchbox" to "Google"),
+        "open maps" to ("com.google.android.apps.maps" to "Maps"),
+        "open youtube" to ("com.google.android.youtube" to "YouTube"),
+        "open calendar" to ("com.google.android.calendar" to "Calendar"),
+        "open chrome" to ("com.android.chrome" to "Chrome"),
+        "open settings" to ("com.android.settings" to "Settings"),
+        "open camera" to ("com.android.camera" to "Camera"),
+        "open phone" to ("com.google.android.dialer" to "Phone"),
+        "open play store" to ("com.android.vending" to "Play Store"),
+        "open clock" to ("com.google.android.deskclock" to "Clock")
     )
 
     private fun routeAppLaunch(lower: String): DeterministicResult? {
@@ -190,9 +156,12 @@ object DeterministicIntentRouter {
         for ((phrase, _) in APP_LAUNCHES) {
             if (lower == phrase || lower == "$phrase app" ||
                 (lower.startsWith("$phrase ") && compoundIndicators.none { lower.contains(it) })) {
-                val packageName = APP_LAUNCHES[phrase]!!
+                val (packageName, friendlyName) = APP_LAUNCHES[phrase]!!
                 return DeterministicResult.Matched(
-                    ToolCall("open_app", JsonObject(mapOf("package_name" to JsonPrimitive(packageName)))),
+                    ToolCall("open_app", JsonObject(mapOf(
+                        "app_name" to JsonPrimitive(friendlyName),
+                        "package_name" to JsonPrimitive(packageName)
+                    ))),
                     intent = "APP_LAUNCH"
                 )
             }

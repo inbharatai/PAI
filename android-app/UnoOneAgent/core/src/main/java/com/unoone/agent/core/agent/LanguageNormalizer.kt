@@ -70,10 +70,13 @@ object LanguageNormalizer {
      */
     val CONSTRAINED_GENERATION_LANGUAGES: Set<String> = setOf("bn", "as")
 
-    // Common filler words to strip from ASR output
+    // Common filler words to strip from ASR output.
+    // "like" and "actually" removed — they carry meaning:
+    //   "open something like WhatsApp" → corrupted if "like" stripped,
+    //   "actually open calendar" → loses emphasis if "actually" stripped.
     private val FILLER_WORDS = setOf(
-        "um", "uh", "hmm", "huh", "ah", "oh", "like", "you know",
-        "so yeah", "i mean", "basically", "actually"
+        "um", "uh", "hmm", "huh", "ah", "oh", "you know",
+        "so yeah", "i mean", "basically"
     )
 
     // Language detection keyword patterns
@@ -84,10 +87,17 @@ object LanguageNormalizer {
         "apna", "sir", "ji", "namaste", "dhanyavaad", "shukriya"
     )
 
+    // "ki" removed — it's a common Hindi conjunction ("that") and causes false
+    // Bengali detection. Bengali detection now requires >=2 keywords (see
+    // BENGALI_MIN_KEYWORD_COUNT) so a single ambiguous word won't trigger a switch.
     private val BENGALI_KEYWORDS = setOf(
-        "ami", "tumi", "koro", "bolo", "ki", "na", "ache", "dao",
+        "ami", "tumi", "koro", "bolo", "na", "ache", "dao",
         "nibo", "dekho", "shono", "likho", "kothay", "kobe"
     )
+
+    /** Minimum Bengali keyword hits required before classifying input as Bengali.
+     *  Prevents false positives from overlapping words like "ki" (Hindi "that"). */
+    private const val BENGALI_MIN_KEYWORD_COUNT = 2
 
     private val TAMIL_KEYWORDS = setOf(
         "ennai", "unggal", "seiyungal", "sol", "enna", "illai", "theriyum",
@@ -219,6 +229,13 @@ object LanguageNormalizer {
             "kn" to words.count { it in KANNADA_KEYWORDS },
             "ml" to words.count { it in MALAYALAM_KEYWORDS }
         )
+
+        // Bengali requires >= BENGALI_MIN_KEYWORD_COUNT keyword hits to prevent
+        // false positives from overlapping words (e.g. Hindi "ki" meaning "that").
+        // If Bengali doesn't meet the threshold, zero out its score so it can't win.
+        if ((langScores["bn"] ?: 0) < BENGALI_MIN_KEYWORD_COUNT) {
+            langScores["bn"] = 0
+        }
 
         val bestLang = langScores.maxByOrNull { it.value }
         if (bestLang != null && bestLang.value >= 1) {

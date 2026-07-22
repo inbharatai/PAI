@@ -216,4 +216,43 @@ class SafetyGuardTest {
         val inputRisk = guard.classifyFromInput("send a whatsapp message to mom")
         assertEquals(toolRisk, inputRisk)
     }
+
+    // === M3: "message" keyword false-positive fix ===
+
+    @Test
+    fun readMessageOnScreen_notBlocked() {
+        // "read the message on screen" should NOT be blocked — it's a read-only operation.
+        assertEquals(RiskLevel.DIRECT, guard.classifyFromInput("read the message on screen"))
+    }
+
+    @Test
+    fun searchMessage_notBlocked() {
+        assertEquals(RiskLevel.DIRECT, guard.classifyFromInput("search for the message from Rahul"))
+    }
+
+    @Test
+    fun checkMessage_notBlocked() {
+        assertEquals(RiskLevel.DIRECT, guard.classifyFromInput("check the message on WhatsApp"))
+    }
+
+    @Test
+    fun showMessage_notBlocked() {
+        assertEquals(RiskLevel.DIRECT, guard.classifyFromInput("show the message from mom"))
+    }
+
+    @Test
+    fun whatMessage_notBlocked() {
+        assertEquals(RiskLevel.DIRECT, guard.classifyFromInput("what does the message say"))
+    }
+
+    @Test
+    fun lookMessage_notBlocked() {
+        assertEquals(RiskLevel.DIRECT, guard.classifyFromInput("look at the message from Priya"))
+    }
+
+    @Test
+    fun sendMessage_stillBlocked() {
+        // "send message" without read/search/check context is still blocked.
+        assertEquals(RiskLevel.BLOCK, guard.classifyFromInput("send message to John"))
+    }
 }

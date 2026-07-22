@@ -381,6 +381,7 @@ object RuleBasedParser {
             // Note deletion — checked BEFORE create_note so negation verbs route to delete,
             // and delete_all_notes / delete_notes become reachable offline (not only via LLM).
             (lowered.contains("delete") || lowered.contains("remove") ||
+                lowered.contains("cancel") || lowered.contains("close") ||
                 lowered.contains("clear") || lowered.contains("erase")) &&
                 (lowered.contains("note") || lowered.contains("notes")) -> {
                 if (lowered.contains("all")) {
@@ -428,9 +429,9 @@ object RuleBasedParser {
             // "search for cats", "search cats", and "google cats". Excludes anything mentioning
             // "note" so "search my notes for X" is not hijacked into a browser open (note search
             // is handled by the LLM/web_search path). URL-encodes the query.
-            (lowered.contains("search for") ||
+            (lowered.contains("search for") && !lowered.contains("note")) ||
                 (lowered.startsWith("search ") && !lowered.contains("note")) ||
-                lowered.startsWith("google ")) && !lowered.contains("note") -> {
+                (lowered.startsWith("google ") && !lowered.contains("note")) -> {
                 val query = lowered
                     .substringAfter("search for")
                     .substringAfter("search")

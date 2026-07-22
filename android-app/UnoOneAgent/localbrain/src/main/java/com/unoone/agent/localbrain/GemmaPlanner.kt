@@ -8,7 +8,6 @@ import com.google.ai.edge.litertlm.Contents
 import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.EngineConfig
 import com.google.ai.edge.litertlm.Message
-import com.google.ai.edge.litertlm.tool
 import com.unoone.agent.core.model.BackendPreference
 import com.unoone.agent.core.model.BrainModelId
 import com.unoone.agent.core.model.BrainModelSpec
@@ -150,11 +149,12 @@ class GemmaPlanner {
             try { conversation?.close() } catch (_: Exception) {}
             conversation = null
 
-            // Build tool set: filtered or full
-            val toolSet = if (candidateTools.isEmpty()) {
-                tool(UnoOneToolSet())
+            // Build tool providers: filtered or full, using DynamicToolProvider to register
+            // only the candidate tools instead of ALL 42 via ToolSet reflection.
+            val toolProviders = if (candidateTools.isEmpty()) {
+                DynamicToolProvider.createAllToolProviders()
             } else {
-                tool(UnoOneToolSet.forTools(candidateTools.map { it.name }.toSet()))
+                DynamicToolProvider.createToolProviders(candidateTools.map { it.name }.toSet())
             }
 
             val systemInstruction = PromptBuilder.buildSystemInstruction(
@@ -164,7 +164,7 @@ class GemmaPlanner {
 
             val config = ConversationConfig(
                 systemInstruction = Contents.of(systemInstruction),
-                tools = listOf(toolSet),
+                tools = toolProviders,
                 automaticToolCalling = false
             )
 
@@ -215,7 +215,7 @@ class GemmaPlanner {
 
                 val conversationConfig = ConversationConfig(
                     systemInstruction = Contents.of(PromptBuilder.buildSystemInstruction(spec.modelFamily)),
-                    tools = listOf(tool(UnoOneToolSet())),
+                    tools = DynamicToolProvider.createAllToolProviders(),
                     automaticToolCalling = false
                 )
 

@@ -81,11 +81,8 @@ object ToolProposalValidator {
             val argValue = call.args[param.name] ?: continue // null args handled by Check 3
             val typeMatch = when (param.type) {
                 ToolParamType.STRING -> argValue is kotlinx.serialization.json.JsonPrimitive && argValue.isString
-                        || (argValue is kotlinx.serialization.json.JsonPrimitive &&
-                            argValue.content?.toIntOrNull() != null &&
-                            !argValue.isString)
-                    // Accept string primitives; also accept unquoted number-as-string for
-                    // model convenience (e.g. "direction": "down" is a string).
+                    // STRING params must be quoted strings — reject bare integers like "direction": 42
+                    // which crash ActionExecutor on .lowercase() / .substring() calls.
                 ToolParamType.INT -> argValue is kotlinx.serialization.json.JsonPrimitive &&
                     argValue.content?.toIntOrNull() != null && !argValue.isString
                 ToolParamType.BOOLEAN -> argValue is kotlinx.serialization.json.JsonPrimitive &&
@@ -96,9 +93,9 @@ object ToolProposalValidator {
                     argValue.content?.toDoubleOrNull() != null && !argValue.isString
                 ToolParamType.STRING_LIST -> argValue is kotlinx.serialization.json.JsonArray
             }
-            // If type doesn't match, reject. For STRING params, be lenient: accept any JsonPrimitive
-            // since the model sometimes wraps strings in quotes inconsistently.
-            if (!typeMatch && param.type != ToolParamType.STRING) {
+            // If type doesn't match, reject — including STRING params that arrived as bare numbers.
+            // Previously STRING was lenient, but bare integers crash ActionExecutor on .lowercase().
+            if (!typeMatch) {
                 return ValidationResult.Rejected(
                     call,
                     "Type mismatch for argument '${param.name}' in tool '$toolName': expected ${param.type}, got ${argValue::class.simpleName}"

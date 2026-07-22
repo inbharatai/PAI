@@ -117,10 +117,23 @@ class SafetyGuard {
             // 2. Draft paths — allow with strong confirmation (the user still reviews + presses send).
             lowered.contains("draft") -> RiskLevel.STRONG_CONFIRM
             (lowered.contains("whatsapp") || lowered.contains("email")) &&
-                (lowered.contains("send") || lowered.contains("message")) -> RiskLevel.STRONG_CONFIRM
+                (lowered.contains("send") || lowered.contains("message")) &&
+                !lowered.contains("read") && !lowered.contains("check") &&
+                !lowered.contains("search") && !lowered.contains("show") &&
+                !lowered.contains("look") -> RiskLevel.STRONG_CONFIRM
 
             // 3. Generic send/message with no draft/app context — block the auto-send intent.
-            lowered.contains("send ") || lowered.contains("message") -> RiskLevel.BLOCK
+            // "message" alone is too broad (blocks "read the message on screen" etc.),
+            // so require compound phrases like "send message" or "message to <contact>".
+            // Exempt read-only contexts: read, search, check, show, look, "what does".
+            lowered.contains("send ") ||
+                (lowered.contains("message") &&
+                    !lowered.contains("read") &&
+                    !lowered.contains("search") &&
+                    !lowered.contains("check") &&
+                    !lowered.contains("show") &&
+                    !lowered.contains("look") &&
+                    !lowered.contains("what ")) -> RiskLevel.BLOCK
 
             // 4. Destructive-but-recoverable.
             lowered.contains("delete all") -> RiskLevel.STRONG_CONFIRM
