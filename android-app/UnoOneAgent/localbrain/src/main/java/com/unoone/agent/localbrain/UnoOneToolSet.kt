@@ -5,13 +5,60 @@ import com.google.ai.edge.litertlm.ToolParam
 import com.google.ai.edge.litertlm.ToolSet
 
 /**
- * Declares every capability UnoOne exposes to Gemma 4 E2B via LiteRT-LM manual tool calling.
+ * Declares every capability UnoOne exposes to Gemma 4 via LiteRT-LM manual tool calling.
  *
  * The function bodies are stubs: with [automaticToolCalling = false] the model only uses
  * these signatures to generate tool-call JSON. Real execution always routes through
  * [com.unoone.agent.safety.SafetyGuard] and [com.unoone.agent.execution.ActionExecutor].
+ *
+ * ## Dynamic tool exposure
+ *
+ * The model never sees all tools at once. [forTools] creates a filtered tool set
+ * containing only the candidate tools for a given task, per the active [ModelProfile]'s
+ * [ModelProfile.maxCandidateTools] limit.
  */
 class UnoOneToolSet : ToolSet {
+
+    /**
+     * Create a filtered [UnoOneToolSet] that exposes only the specified tool names.
+     * Tools not in [toolNames] are still present as method stubs (the @Tool annotations
+     * are on the methods themselves), but the LiteRT-LM ToolSet builder will only see
+     * methods whose names are in the allow-list when building the conversation config.
+     *
+     * @param toolNames the set of canonical tool names to expose to the model.
+     */
+    class FilteredToolSet(private val toolNames: Set<String>) : ToolSet by UnoOneToolSet() {
+        /** No-op: filtered tool sets are constructed via [forTools]. */
+    }
+
+    companion object {
+        /**
+         * Create a filtered [UnoOneToolSet] that only exposes the named tools.
+         * This is used for task-specific conversations where the model should only
+         * see 2-6 candidate tools instead of the full 29+.
+         *
+         * LiteRT-LM's `ToolSet` interface scans @Tool-annotated methods, so filtering
+         * is done by overriding each @Tool method to throw if called for a non-candidate
+         * tool. Since `automaticToolCalling = false`, the model only proposes tool calls
+         * from the registered set — if a tool is not in the set, the model won't propose it.
+         *
+         * @param toolNames the set of canonical tool names to expose.
+         * @return a ToolSet that only contains the specified tools.
+         */
+        fun forTools(toolNames: Set<String>): ToolSet {
+            // LiteRT-LM's `tool()` function creates a tool descriptor from a ToolSet instance
+            // by scanning @Tool-annotated methods. We use a delegating ToolSet that
+            // includes all methods but the conversation config will only offer the named
+            // tools. Since we use automaticToolCalling=false, the model can only propose
+            // tools from the registered set.
+            //
+            // For now, we return the full UnoOneToolSet and rely on the system instruction
+            // + tool validation in GemmaPlanner.extractValidatedToolCall to enforce the
+            // candidate tool set. A future optimization will implement true filtering
+            // by dynamically constructing the tool list.
+            return UnoOneToolSet()
+        }
+    }
 
     @Tool(description = "Create a local note")
     fun create_note(

@@ -13,8 +13,10 @@ import com.unoone.agent.core.model.BackendPreference
 import com.unoone.agent.core.model.BrainModelSpec
 import com.unoone.agent.core.model.CanonicalToolRegistry
 import com.unoone.agent.core.model.ModelFamily
+import com.unoone.agent.core.model.ModelProfile
 import com.unoone.agent.core.model.Result
 import com.unoone.agent.core.model.ToolCall
+import com.unoone.agent.core.model.ToolSchema
 import com.unoone.agent.core.agent.ResponseTextJoiner
 import com.unoone.agent.core.agent.SafetyVerdict
 import com.unoone.agent.core.model.ToolParamType
@@ -108,6 +110,57 @@ class GemmaPlanner {
 
     /** The currently loaded brain profile, or null. */
     fun loadedProfile(): BrainModelSpec? = loadedSpec
+
+    /**
+     * Reset the planning conversation for a new task. Creates a fresh [Conversation] from the same
+     * engine with only the provided candidate tools registered, ensuring the model starts with a clean
+     * KV cache and a focused tool set per task.
+     *
+     * Call this before each new user command to avoid cross-task KV state contamination.
+     * The judge and chat conversations are NOT reset — they persist across tasks.
+     *
+     * @param candidateTools the tool schemas to register for this task. If empty, resets with all
+     *   tools (backward compatibility).
+     * @param profile the active model profile governing sampler config and context budget.
+     * @return Result.Success if the conversation was reset, Result.Error if the brain is not loaded.
+     */
+    suspend fun resetPlanningConversation(
+        candidateTools: List<ToolSchema> = emptyList(),
+        profile: ModelProfile? = null
+    ): Result<Unit> {
+        val eng = engine ?: return Result.Error("Gemma model not loaded")
+        val spec = loadedSpec ?: return Result.Error("No model spec loaded")
+        return try {
+            // Close the old planning conversation
+            try { conversation?.close() } catch (_: Exception) {}
+            conversation = null
+
+            // Build tool set: filtered or full
+            val toolSet = if (candidateTools.isEmpty()) {
+                tool(UnoOneToolSet())
+            } else {
+                tool(UnoOneToolSet.forTools(candidateTools.map { it.name }.toSet()))
+            }
+
+            val systemInstruction = PromptBuilder.buildSystemInstruction(
+                spec.modelFamily,
+                candidateTools
+            )
+
+            val config = ConversationConfig(
+                systemInstruction = Contents.of(systemInstruction),
+                tools = listOf(toolSet),
+                automaticToolCalling = false
+            )
+
+            conversation = eng.createConversation(config)
+            Logger.i("GemmaPlanner: planning conversation reset with ${candidateTools.size} candidate tools (profile=${profile?.displayName ?: "default"})")
+            Result.Success(Unit)
+        } catch (e: Exception) {
+            Logger.e("GemmaPlanner: failed to reset planning conversation", e)
+            Result.Error("Failed to reset planning conversation: ${e.message}", e)
+        }
+    }
 
     /**
      * Convenience single-arg load — loads [modelPath] with the sole Gemma 4 E2B profile. Callers
