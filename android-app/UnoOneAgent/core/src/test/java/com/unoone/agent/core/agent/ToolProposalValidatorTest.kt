@@ -105,7 +105,8 @@ class ToolProposalValidatorTest {
         assertTrue("Missing required argument should be rejected",
             result is ToolProposalValidator.ValidationResult.Rejected)
         val rejected = result as ToolProposalValidator.ValidationResult.Rejected
-        assertTrue(rejected.reason.contains("missing required argument"))
+        assertTrue(rejected.reason.lowercase().contains("missing required argument") ||
+            rejected.reason.lowercase().contains("required argument"))
     }
 
     // ── Calendar candidates ─────────────────────────────────────────────

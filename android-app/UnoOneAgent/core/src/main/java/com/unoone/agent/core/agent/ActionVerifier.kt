@@ -109,12 +109,13 @@ object ActionVerifier {
     fun buildConciseObservation(result: ActionResult): String {
         return when {
             result.isVerifiedSuccess -> "✓ ${result.tool}: ${result.userMessage}"
-            result.verified && result.status == ActionResult.Status.PARTIAL ->
+            result.status == ActionResult.Status.PARTIAL ->
                 "⚠ ${result.tool}: ${result.userMessage} (partial)"
             result.status == ActionResult.Status.FAILED ->
                 "✗ ${result.tool}: ${result.userMessage}" +
                     (result.recoverableError?.let { " [recoverable: $it]" } ?: "")
-            else -> "? ${result.tool}: ${result.userMessage} (unverified)"
+            !result.verified -> "? ${result.tool}: ${result.userMessage} (unverified)"
+            else -> "→ ${result.tool}: ${result.userMessage}"
         }
     }
 

@@ -107,7 +107,7 @@ class ObservationBuilderTest {
 
     @Test
     fun fromLegacyResult_success() {
-        val result = Result.success("WhatsApp opened")
+        val result = Result.Success("WhatsApp opened")
         val obs = ObservationBuilder.fromLegacyResult("open_app", result)
         assertTrue(obs.startsWith("✓"))
         assertTrue(obs.contains("open_app"))
@@ -116,7 +116,7 @@ class ObservationBuilderTest {
 
     @Test
     fun fromLegacyResult_error() {
-        val result = Result.error("App not installed")
+        val result = Result.Error("App not installed")
         val obs = ObservationBuilder.fromLegacyResult("open_app", result)
         assertTrue(obs.startsWith("✗"))
         assertTrue(obs.contains("App not installed"))

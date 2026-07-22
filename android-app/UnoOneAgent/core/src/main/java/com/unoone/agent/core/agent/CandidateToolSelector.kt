@@ -149,16 +149,18 @@ object CandidateToolSelector {
         if (intent == TaskIntent.CHAT) return emptyList()
 
         val intentTools = TOOLS_BY_INTENT[intent] ?: TOOLS_BY_INTENT[TaskIntent.UNKNOWN]!!
-        val alwaysTools = ALWAYS_INCLUDED.filterNot { it in intentTools }
 
-        // Merge: intent tools first (priority order), then always-included extras
-        val merged = intentTools + alwaysTools.filterNot { it in intentTools }
+        // speak_response is always included regardless of cap — it's the model's escape hatch.
+        // Take intent tools up to (maxCandidateTools - 1) to leave room for speak_response.
+        val cappedIntent = intentTools
+            .filterNot { it == "speak_response" }
+            .take(profile.maxCandidateTools - 1)
 
-        // Cap to profile limit
-        val capped = merged.take(profile.maxCandidateTools)
+        // Always include speak_response as the last tool.
+        val merged = cappedIntent + listOf("speak_response")
 
         // Resolve to schemas, silently dropping unknown names
-        return capped.mapNotNull { CanonicalToolRegistry.schemaFor(it) }
+        return merged.mapNotNull { CanonicalToolRegistry.schemaFor(it) }
     }
 
     /**

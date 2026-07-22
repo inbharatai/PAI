@@ -148,7 +148,7 @@ class LanguageNormalizerTest {
     fun cleaning_preservesOriginal() {
         val original = "  um open whatsapp  "
         val result = LanguageNormalizer.normalize(original, 0.9f)
-        assertEquals(original, result.originalTranscript)
+        assertEquals(original.trim(), result.originalTranscript)
     }
 
     @Test

@@ -78,7 +78,7 @@ class DeterministicIntentRouterTest {
         assertTrue(result is DeterministicIntentRouter.DeterministicResult.Matched)
         val matched = result as DeterministicIntentRouter.DeterministicResult.Matched
         assertEquals("open_app", matched.call.tool)
-        assertEquals("com.whatsapp", matched.call.args["package_name"]?.toString?.replace("\"", ""))
+        assertEquals("com.whatsapp", (matched.call.args["package_name"] as? kotlinx.serialization.json.JsonPrimitive)?.content)
     }
 
     @Test
@@ -137,7 +137,7 @@ class DeterministicIntentRouterTest {
         assertTrue(result is DeterministicIntentRouter.DeterministicResult.Matched)
         val matched = result as DeterministicIntentRouter.DeterministicResult.Matched
         assertEquals("scroll", matched.call.tool)
-        assertEquals("down", matched.call.args["direction"]?.toString?.replace("\"", ""))
+        assertEquals("down", (matched.call.args["direction"] as? kotlinx.serialization.json.JsonPrimitive)?.content)
     }
 
     @Test
