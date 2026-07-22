@@ -1,6 +1,7 @@
 package com.unoone.agent.localbrain
 
 import com.unoone.agent.core.model.ModelFamily
+import com.unoone.agent.core.model.ToolSchema
 
 /**
  * Configurable mobile context budget. UnoOne never sends the full theoretical context window; it
@@ -84,6 +85,25 @@ object PromptBuilder {
         appendLine("- describe_scene(aspect?)")
         appendLine("- secure_browser_task(origin, task)  # Standard accepts approved sites; explicit Prototype/Off accepts any public HTTPS URL. Drives the voice-controlled Secure Browser; Standard keeps sensitive steps gated.")
         appendLine("- prepare_document_fill(format)  # Opens the fully offline, save-as-copy PDF or DOCX document workflow; format must be pdf or docx.")
+        appendLine()
+        appendLine("Atomic accessibility tools (prefer over system_control):")
+        appendLine("- go_home()")
+        appendLine("- go_back()")
+        appendLine("- scroll(direction)  # direction: up, down, left, right")
+        appendLine("- click_accessibility_node(node_id)")
+        appendLine("- type_into_accessibility_node(node_id, text)")
+        appendLine("- open_notifications()")
+        appendLine("- open_recents()")
+        appendLine("- long_press_accessibility_node(node_id)")
+        appendLine()
+        appendLine("Messaging tools (prefer over send_whatsapp — always resolve_contact first):")
+        appendLine("- resolve_contact(query)  # Look up contact by name")
+        appendLine("- draft_whatsapp_message(contact_name, message)  # Opens WhatsApp with draft; user must review and send")
+        appendLine("- send_prepared_whatsapp(contact_name, message)  # Confirmed send after user review")
+        appendLine()
+        appendLine("Calendar tools (prefer over open_calendar_insert — check conflicts first):")
+        appendLine("- check_calendar_conflict(date?, start_time?, end_time?)  # Check for existing events")
+        appendLine("- create_calendar_event(title, date?, start_time?, end_time?)  # Create event after conflict check")
     }
 
     /** Compatibility overload used by existing callers and tests. */
@@ -92,6 +112,40 @@ object PromptBuilder {
     /** UnoOne V2 accepts only [ModelFamily.GEMMA_4]. */
     fun buildSystemInstruction(family: ModelFamily): String = when (family) {
         ModelFamily.GEMMA_4 -> gemma4Instruction
+    }
+
+    /**
+     * Build a system instruction listing only the provided candidate tools.
+     * When the model is given a focused tool set per task, it should only see
+     * those tools in the system instruction, not the full 29+.
+     *
+     * If [candidateTools] is empty, falls back to the full instruction listing all tools.
+     */
+    fun buildSystemInstruction(family: ModelFamily, candidateTools: List<ToolSchema>): String {
+        if (candidateTools.isEmpty()) return buildSystemInstruction(family)
+
+        val toolLines = candidateTools.joinToString("\n") { tool ->
+            val params = tool.params.joinToString(", ") { p ->
+                if (p.required) "${p.name}" else "${p.name}?"
+            }
+            "- ${tool.name}($params)"
+        }
+
+        return buildString {
+            appendLine("You are UnoOne, a privacy-first offline Android AI agent that plans phone actions.")
+            appendLine("You only PROPOSE actions using the tools below. The app validates permissions, safety and confirmation before executing anything.")
+            appendLine("Pick exactly one best tool per response. Multi-step work is controlled by the app's bounded agent loop, not by emitting multiple tool calls.")
+            appendLine("Never fabricate apps, contacts, permissions, screen elements, page content or tool results. Use only facts supplied in the current context.")
+            appendLine("Never enter or expose passwords, OTPs, card data, banking credentials or authentication secrets.")
+            appendLine("Never send a message or make a payment silently. Never install an app, bypass CAPTCHA or accept legal declarations.")
+            appendLine("Email and WhatsApp tools only prepare drafts that the user must review and send.")
+            appendLine("If the request is genuinely ambiguous, use speak_response to ask one short clarifying question.")
+            appendLine("Keep spoken responses concise because UnoOne reads them aloud.")
+            appendLine("Reply in the same language as the user language in current context. If it is absent, use the language of the current command. Do not infer language from the TTS voice or previous turns.")
+            appendLine()
+            appendLine("Available tools:")
+            append(toolLines)
+        }
     }
 
     fun buildUserMessage(command: String, context: ContextSnapshot): String =

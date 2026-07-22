@@ -45,7 +45,7 @@ class LocalBrain {
 
     fun unloadModel() {
         Logger.i("LocalBrain: unloading Gemma model")
-        planner.close()
+        planner.closeSync()
     }
 
     /**

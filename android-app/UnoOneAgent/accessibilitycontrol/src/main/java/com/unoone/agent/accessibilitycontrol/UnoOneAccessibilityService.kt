@@ -189,6 +189,119 @@ class UnoOneAccessibilityService : AccessibilityService() {
     fun openNotifications(): Boolean = performGlobalAction(GLOBAL_ACTION_NOTIFICATIONS)
     fun openQuickSettings(): Boolean = performGlobalAction(GLOBAL_ACTION_QUICK_SETTINGS)
 
+    /**
+     * Click a specific accessibility node by its view ID resource name.
+     * This is more precise than text-based clicking — the model proposes a node_id
+     * that was identified in a previous read_screen or ocr_screen step.
+     */
+    fun clickNodeById(nodeId: String): Boolean {
+        val rootNode = rootInActiveWindow ?: return false
+        try {
+            val nodes = rootNode.findAccessibilityNodeInfosByViewId(nodeId)
+            try {
+                for (node in nodes) {
+                    if (node.isClickable) {
+                        return node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                    }
+                    // Walk up to find a clickable ancestor
+                    var parent = node.parent
+                    while (parent != null) {
+                        if (parent.isClickable) {
+                            val clicked = parent.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                            parent.recycle()
+                            return clicked
+                        }
+                        val grandParent = parent.parent
+                        parent.recycle()
+                        parent = grandParent
+                    }
+                }
+                return false
+            } finally {
+                nodes.forEach { it.recycle() }
+            }
+        } finally {
+            rootNode.recycle()
+        }
+    }
+
+    /**
+     * Type text into a specific accessibility node by its view ID resource name.
+     * This is more precise than text-based filling — the model proposes a node_id
+     * that was identified in a previous read_screen or ocr_screen step.
+     */
+    fun typeIntoNodeById(nodeId: String, text: String): Boolean {
+        val rootNode = rootInActiveWindow ?: return false
+        try {
+            val nodes = rootNode.findAccessibilityNodeInfosByViewId(nodeId)
+            try {
+                for (node in nodes) {
+                    if (node.isEditable) {
+                        val args = Bundle()
+                        args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+                        // Focus the node first
+                        node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+                        return node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+                    }
+                    // Try parent if the node itself isn't editable
+                    var parent = node.parent
+                    while (parent != null) {
+                        if (parent.isEditable) {
+                            val args = Bundle()
+                            args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+                            parent.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+                            val result = parent.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+                            parent.recycle()
+                            return result
+                        }
+                        val grandParent = parent.parent
+                        parent.recycle()
+                        parent = grandParent
+                    }
+                }
+                return false
+            } finally {
+                nodes.forEach { it.recycle() }
+            }
+        } finally {
+            rootNode.recycle()
+        }
+    }
+
+    /**
+     * Long-press a specific accessibility node by its view ID resource name.
+     */
+    fun longPressNodeById(nodeId: String): Boolean {
+        val rootNode = rootInActiveWindow ?: return false
+        try {
+            val nodes = rootNode.findAccessibilityNodeInfosByViewId(nodeId)
+            try {
+                for (node in nodes) {
+                    val bounds = android.graphics.Rect()
+                    node.getBoundsInScreen(bounds)
+                    if (!bounds.isEmpty) {
+                        val x = bounds.exactCenterX()
+                        val y = bounds.exactCenterY()
+                        // Delegate to the coordinate-based longPress
+                        return longPress(x, y)
+                    }
+                }
+                // Fall back to text-based long press if view ID lookup fails
+                return false
+            } finally {
+                nodes.forEach { it.recycle() }
+            }
+        } finally {
+            rootNode.recycle()
+        }
+    }
+
+    /**
+     * Find a node by text and click it. Used by the legacy find_and_click system_control action
+     * and the rule-based parser for accessibility commands.
+     */
+    fun findAndClick(text: String): Boolean = clickNodeWithText(text)
+
     private fun performSwipe(sx: Float, sy: Float, ex: Float, ey: Float, duration: Long): Boolean {
         return swipe(sx, sy, ex, ey, duration)
     }

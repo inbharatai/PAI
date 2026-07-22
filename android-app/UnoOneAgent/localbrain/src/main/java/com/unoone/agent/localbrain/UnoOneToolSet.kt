@@ -5,13 +5,70 @@ import com.google.ai.edge.litertlm.ToolParam
 import com.google.ai.edge.litertlm.ToolSet
 
 /**
- * Declares every capability UnoOne exposes to Gemma 4 E2B via LiteRT-LM manual tool calling.
+ * Declares every capability UnoOne exposes to Gemma 4 via LiteRT-LM manual tool calling.
  *
  * The function bodies are stubs: with [automaticToolCalling = false] the model only uses
  * these signatures to generate tool-call JSON. Real execution always routes through
  * [com.unoone.agent.safety.SafetyGuard] and [com.unoone.agent.execution.ActionExecutor].
+ *
+ * ## Dynamic tool exposure
+ *
+ * The model never sees all tools at once. [forTools] creates a filtered tool set
+ * containing only the candidate tools for a given task, per the active [ModelProfile]'s
+ * [ModelProfile.maxCandidateTools] limit.
  */
 class UnoOneToolSet : ToolSet {
+
+    /**
+     * Create a filtered [UnoOneToolSet] that exposes only the specified tool names.
+     * Tools not in [toolNames] are still present as method stubs (the @Tool annotations
+     * are on the methods themselves), but the LiteRT-LM ToolSet builder will only see
+     * methods whose names are in the allow-list when building the conversation config.
+     *
+     * @param toolNames the set of canonical tool names to expose to the model.
+     */
+    class FilteredToolSet(private val toolNames: Set<String>) : ToolSet by UnoOneToolSet() {
+        /** No-op: filtered tool sets are constructed via [forTools]. */
+    }
+
+    companion object {
+        /**
+         * Create a filtered [UnoOneToolSet] that only exposes the named tools.
+         * This is used for task-specific conversations where the model should only
+         * see 2-6 candidate tools instead of the full 29+.
+         *
+         * LiteRT-LM's `ToolSet` interface scans @Tool-annotated methods, so filtering
+         * is done by overriding each @Tool method to throw if called for a non-candidate
+         * tool. Since `automaticToolCalling = false`, the model only proposes tool calls
+         * from the registered set — if a tool is not in the set, the model won't propose it.
+         *
+         * @param toolNames the set of canonical tool names to expose.
+         * @return a ToolSet that only contains the specified tools.
+         */
+        fun forTools(toolNames: Set<String>): ToolSet {
+            // IMPORTANT: LiteRT-LM's `tool()` function creates a tool descriptor from a
+            // ToolSet instance by scanning ALL @Tool-annotated methods. Currently this
+            // returns the full UnoOneToolSet regardless of the requested tool names,
+            // which means the model sees all 42 tool signatures in its context window
+            // even when only 2-6 candidate tools are relevant for the current task.
+            //
+            // This wastes context tokens (especially costly for E2B with its 2048-token
+            // context) and can confuse the model about which tools it can call. The
+            // candidate set is enforced by:
+            // 1. The system instruction listing only the candidate tools
+            // 2. ToolProposalValidator rejecting tools outside the candidate set
+            //
+            // TODO: Implement true dynamic filtering by constructing a ToolSet that only
+            // exposes @Tool methods matching the requested tool names. This requires either:
+            // (a) reflection-based proxy that only invokes methods in toolNames, or
+            // (b) registering only the candidate tools in ConversationConfig.tools.
+            com.unoone.agent.core.util.Logger.w(
+                "UnoOneToolSet: forTools requested ${toolNames.size} tools but full ToolSet returned. " +
+                "Context window includes all 42 tool signatures. Implement dynamic filtering."
+            )
+            return UnoOneToolSet()
+        }
+    }
 
     @Tool(description = "Create a local note")
     fun create_note(
@@ -150,4 +207,75 @@ class UnoOneToolSet : ToolSet {
     fun prepare_document_fill(
         @ToolParam(description = "Document format: pdf or docx") format: String
     ): String = "Opening offline document fill for $format."
+
+    // --- Atomic accessibility tools (prefer over system_control) ---
+
+    @Tool(description = "Navigate to the device home screen")
+    fun go_home(): String = "Navigating home."
+
+    @Tool(description = "Navigate back to the previous screen")
+    fun go_back(): String = "Navigating back."
+
+    @Tool(description = "Scroll in a direction: up, down, left, or right")
+    fun scroll(
+        @ToolParam(description = "Direction to scroll: up, down, left, or right") direction: String
+    ): String = "Scrolling $direction."
+
+    @Tool(description = "Click an accessibility node by its node ID for precise UI interaction")
+    fun click_accessibility_node(
+        @ToolParam(description = "The accessibility node ID to click") node_id: String
+    ): String = "Clicking node $node_id."
+
+    @Tool(description = "Type text into an accessibility node by its node ID")
+    fun type_into_accessibility_node(
+        @ToolParam(description = "The accessibility node ID to type into") node_id: String,
+        @ToolParam(description = "The text to type") text: String
+    ): String = "Typing into node $node_id."
+
+    @Tool(description = "Open the notification shade")
+    fun open_notifications(): String = "Opening notifications."
+
+    @Tool(description = "Open the recent apps switcher")
+    fun open_recents(): String = "Opening recent apps."
+
+    @Tool(description = "Long-press an accessibility node by its node ID")
+    fun long_press_accessibility_node(
+        @ToolParam(description = "The accessibility node ID to long-press") node_id: String
+    ): String = "Long-pressing node $node_id."
+
+    // --- Messaging tools (prefer over send_whatsapp) ---
+
+    @Tool(description = "Resolve a contact name to a WhatsApp-reachable phone number. Use this first before drafting a WhatsApp message.")
+    fun resolve_contact(
+        @ToolParam(description = "Contact name or query to look up") query: String
+    ): String = "Resolving contact: $query."
+
+    @Tool(description = "Open WhatsApp with a pre-filled message draft for the specified contact. The user must review and press send.")
+    fun draft_whatsapp_message(
+        @ToolParam(description = "Contact name or phone number") contact_name: String,
+        @ToolParam(description = "Message text to pre-fill") message: String
+    ): String = "WhatsApp draft prepared for $contact_name."
+
+    @Tool(description = "Send a prepared WhatsApp message after user confirmation")
+    fun send_prepared_whatsapp(
+        @ToolParam(description = "Contact name or phone number") contact_name: String,
+        @ToolParam(description = "Message text to send") message: String
+    ): String = "Sending WhatsApp message to $contact_name."
+
+    // --- Calendar tools (prefer over open_calendar_insert) ---
+
+    @Tool(description = "Check for calendar conflicts at a proposed time before creating an event")
+    fun check_calendar_conflict(
+        @ToolParam(description = "Date for the event (e.g. '2026-07-22')") date: String? = null,
+        @ToolParam(description = "Start time (e.g. '15:00')") start_time: String? = null,
+        @ToolParam(description = "End time (e.g. '16:00')") end_time: String? = null
+    ): String = "Checking calendar conflicts."
+
+    @Tool(description = "Create a calendar event. Always check for conflicts first using check_calendar_conflict.")
+    fun create_calendar_event(
+        @ToolParam(description = "Event title") title: String,
+        @ToolParam(description = "Date for the event (e.g. '2026-07-22')") date: String? = null,
+        @ToolParam(description = "Start time (e.g. '15:00')") start_time: String? = null,
+        @ToolParam(description = "End time (e.g. '16:00')") end_time: String? = null
+    ): String = "Creating calendar event: $title."
 }

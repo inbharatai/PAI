@@ -4,6 +4,7 @@ import com.unoone.agent.core.interfaces.ICommandParser
 import com.unoone.agent.core.model.compoundSteps
 import com.unoone.agent.core.util.InputSanitizer
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -41,19 +42,18 @@ class CommandParserTest {
     }
 
     @Test
-    fun parseSystemControlScrollDown() {
+    fun parseScrollDownEmitsAtomicScroll() {
         val result = parser.parse("scroll down")
         assertNotNull(result)
-        assertEquals("system_control", result!!.tool)
-        assertEquals("scroll_down", result.args["action"]?.toString()?.replace("\"", ""))
+        assertEquals("scroll", result!!.tool)
+        assertEquals("down", result.args["direction"]?.jsonPrimitive?.content)
     }
 
     @Test
-    fun parseGoHome() {
+    fun parseGoHomeEmitsAtomicGoHome() {
         val result = parser.parse("go home")
         assertNotNull(result)
-        assertEquals("system_control", result!!.tool)
-        assertEquals("go_home", result.args["action"]?.toString()?.replace("\"", ""))
+        assertEquals("go_home", result!!.tool)
     }
 
     @Test
@@ -102,8 +102,8 @@ class CommandParserTest {
         assertEquals("compound", result!!.tool)
         val steps = result!!.compoundSteps()
         assertEquals(2, steps.size)
-        assertEquals("system_control", steps[0].tool)
-        assertEquals("system_control", steps[1].tool)
+        assertEquals("scroll", steps[0].tool)
+        assertEquals("go_home", steps[1].tool)
     }
 
     @Test

@@ -74,6 +74,8 @@ class ActionExecutorToolCoverageTest {
     @Test
     fun deactivateBlindAidIsHandledAndReturnsSuccess() {
         // Regression for the prior `deactivate_blind_id` typo: the correct tool name must resolve.
+        // Wire the Blind Aid callback so the branch returns Success instead of Error.
+        executor._setBlindAidActive = { _ -> }
         val result = runBlocking { executor.executeTool(ToolCall("deactivate_blind_aid", JsonObject(emptyMap()))) }
         assertTrue("deactivate_blind_aid must be a handled branch", result is Result.Success)
         assertEquals("Blind Aid deactivated.", (result as Result.Success).data)
@@ -185,7 +187,23 @@ class ActionExecutorToolCoverageTest {
         // is wired in this unit test → a handled "Secure Browser is not available" Result.Error
         // (NOT a router fallback). A non-approved origin would return the "not approved" error.
         "secure_browser_task" to obj { put("origin", "unigurus"); put("task", "fill the form") },
-        "prepare_document_fill" to obj { put("format", "pdf") }
+        "prepare_document_fill" to obj { put("format", "pdf") },
+        // --- Atomic accessibility tools (prefer over system_control) ---
+        "go_home" to JsonObject(emptyMap()),
+        "go_back" to JsonObject(emptyMap()),
+        "scroll" to obj { put("direction", "down") },
+        "click_accessibility_node" to obj { put("node_id", "node-0") },
+        "type_into_accessibility_node" to obj { put("node_id", "node-0"); put("text", "hello") },
+        "open_notifications" to JsonObject(emptyMap()),
+        "open_recents" to JsonObject(emptyMap()),
+        "long_press_accessibility_node" to obj { put("node_id", "node-0") },
+        // --- Messaging tools (prefer over send_whatsapp) ---
+        "resolve_contact" to obj { put("query", "mom") },
+        "draft_whatsapp_message" to obj { put("contact_name", "mom"); put("message", "hi") },
+        "send_prepared_whatsapp" to obj { put("contact_name", "mom"); put("message", "hi") },
+        // --- Calendar tools (prefer over open_calendar_insert) ---
+        "check_calendar_conflict" to obj { put("date", ""); put("start_time", ""); put("end_time", "") },
+        "create_calendar_event" to obj { put("title", "Meeting") }
     )
 
     private fun obj(build: kotlinx.serialization.json.JsonObjectBuilder.() -> Unit): JsonObject =

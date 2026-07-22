@@ -10,16 +10,21 @@ import com.google.ai.edge.litertlm.EngineConfig
 import com.google.ai.edge.litertlm.Message
 import com.google.ai.edge.litertlm.tool
 import com.unoone.agent.core.model.BackendPreference
+import com.unoone.agent.core.model.BrainModelId
 import com.unoone.agent.core.model.BrainModelSpec
 import com.unoone.agent.core.model.CanonicalToolRegistry
 import com.unoone.agent.core.model.ModelFamily
+import com.unoone.agent.core.model.ModelLoadResult
+import com.unoone.agent.core.model.ModelProfile
 import com.unoone.agent.core.model.Result
 import com.unoone.agent.core.model.ToolCall
+import com.unoone.agent.core.model.ToolSchema
 import com.unoone.agent.core.agent.ResponseTextJoiner
 import com.unoone.agent.core.agent.SafetyVerdict
 import com.unoone.agent.core.model.ToolParamType
 import com.unoone.agent.core.util.Logger
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -86,6 +91,15 @@ class GemmaPlanner {
     @Volatile
     private var loadedSpec: BrainModelSpec? = null
 
+    /**
+     * The last [ModelLoadResult] for the current or most recent load attempt.
+     * Records the actual backend (GPU/NPU/CPU), load time, and available RAM.
+     * Used by [ModelTierSelector] to decide whether E4B is viable on this device.
+     * Null before the first load attempt.
+     */
+    @Volatile
+    private var lastLoadResult: ModelLoadResult? = null
+
     /** Serializes loads so two concurrent callers can't both close + reinitialize (leaking an engine). */
     private val loadMutex = Mutex()
 
@@ -109,6 +123,60 @@ class GemmaPlanner {
     /** The currently loaded brain profile, or null. */
     fun loadedProfile(): BrainModelSpec? = loadedSpec
 
+    /** The last model load result, or null if no load has been attempted. */
+    fun lastLoadResult(): ModelLoadResult? = lastLoadResult
+
+    /**
+     * Reset the planning conversation for a new task. Creates a fresh [Conversation] from the same
+     * engine with only the provided candidate tools registered, ensuring the model starts with a clean
+     * KV cache and a focused tool set per task.
+     *
+     * Call this before each new user command to avoid cross-task KV state contamination.
+     * The judge and chat conversations are NOT reset — they persist across tasks.
+     *
+     * @param candidateTools the tool schemas to register for this task. If empty, resets with all
+     *   tools (backward compatibility).
+     * @param profile the active model profile governing sampler config and context budget.
+     * @return Result.Success if the conversation was reset, Result.Error if the brain is not loaded.
+     */
+    suspend fun resetPlanningConversation(
+        candidateTools: List<ToolSchema> = emptyList(),
+        profile: ModelProfile? = null
+    ): Result<Unit> = inferenceMutex.withLock {
+        val eng = engine ?: return Result.Error("Gemma model not loaded")
+        val spec = loadedSpec ?: return Result.Error("No model spec loaded")
+        return try {
+            // Close the old planning conversation
+            try { conversation?.close() } catch (_: Exception) {}
+            conversation = null
+
+            // Build tool set: filtered or full
+            val toolSet = if (candidateTools.isEmpty()) {
+                tool(UnoOneToolSet())
+            } else {
+                tool(UnoOneToolSet.forTools(candidateTools.map { it.name }.toSet()))
+            }
+
+            val systemInstruction = PromptBuilder.buildSystemInstruction(
+                spec.modelFamily,
+                candidateTools
+            )
+
+            val config = ConversationConfig(
+                systemInstruction = Contents.of(systemInstruction),
+                tools = listOf(toolSet),
+                automaticToolCalling = false
+            )
+
+            conversation = eng.createConversation(config)
+            Logger.i("GemmaPlanner: planning conversation reset with ${candidateTools.size} candidate tools (profile=${profile?.displayName ?: "default"})")
+            Result.Success(Unit)
+        } catch (e: Exception) {
+            Logger.e("GemmaPlanner: failed to reset planning conversation", e)
+            Result.Error("Failed to reset planning conversation: ${e.message}", e)
+        }
+    }
+
     /**
      * Convenience single-arg load — loads [modelPath] with the sole Gemma 4 E2B profile. Callers
      * that already hold the model specification should use the explicit overload below.
@@ -129,7 +197,7 @@ class GemmaPlanner {
         // Also prevents simultaneous inference and model replacement.
         loadMutex.withLock {
             if (isLoaded) {
-                close()
+                closeInternal()
             }
             lastLoadError = ""
             try {
@@ -138,6 +206,10 @@ class GemmaPlanner {
                 val (newEngine, backend) = tryLoadBackends(modelPath, backends)
                     ?: run {
                         lastLoadError = "${spec.displayName} failed to load on any backend (${backendsNames(backends)})"
+                        lastLoadResult = ModelLoadResult.failed(
+                            modelId = spec.id,
+                            errorMessage = lastLoadError
+                        )
                         return@withLock Result.Error(lastLoadError)
                     }
 
@@ -194,17 +266,29 @@ class GemmaPlanner {
                 activeBackend = backend
                 loadedSpec = spec
                 isLoaded = true
+                lastLoadResult = ModelLoadResult.loaded(
+                    modelId = spec.id,
+                    backend = backend,
+                    loadTimeMs = System.currentTimeMillis() - loadStart,
+                    availableRamMb = 0, // Caller should update with actual ActivityManager data
+                    profile = com.unoone.agent.core.model.ModelProfiles.forId(spec.id)
+                )
                 Logger.i("GemmaPlanner: ${spec.displayName} loaded on $backend backend, conversation ready")
                 com.unoone.agent.observability.Diagnostics.recordModelLoadTime(System.currentTimeMillis() - loadStart)
                 Result.Success(Unit)
             } catch (e: Exception) {
                 Logger.e("GemmaPlanner: failed to load ${spec.displayName}", e)
                 // Full cleanup on any partial failure — never leave isLoaded true with no engine.
-                runCatching { close() }
+                // closeInternal() because we're already inside loadMutex.withLock.
+                runCatching { closeInternal() }
                 isLoaded = false
                 activeBackend = ""
                 loadedSpec = null
                 lastLoadError = e.message ?: "Unknown load error"
+                lastLoadResult = ModelLoadResult.failed(
+                    modelId = spec.id,
+                    errorMessage = lastLoadError
+                )
                 Result.Error("Failed to load ${spec.displayName}: ${e.message}", e)
             }
         }
@@ -213,7 +297,7 @@ class GemmaPlanner {
     /** Maps a profile's [BackendPreference] to the ordered LiteRT-LM backends to attempt. */
     private fun backendsToTry(pref: BackendPreference): List<Backend> = when (pref) {
         BackendPreference.CPU_ONLY -> listOf(Backend.CPU())
-        BackendPreference.GPU_FIRST, BackendPreference.ANY -> listOf(Backend.GPU(), Backend.CPU())
+        BackendPreference.GPU_FIRST, BackendPreference.ANY -> listOf(Backend.GPU(), Backend.NPU(), Backend.CPU())
     }
 
     private fun backendsNames(backends: List<Backend>): String =
@@ -265,7 +349,11 @@ class GemmaPlanner {
      * — never executed). Returns null never: a no-tool answer becomes a `speak_response` ToolCall.
      */
     suspend fun plan(command: String, context: ContextSnapshot): Result<ToolCall> {
-        val conv = conversation ?: return Result.Error("Gemma model not loaded")
+        // Capture the conversation reference inside the mutex to prevent a race with
+        // resetPlanningConversation or close() swapping/closing the conversation between
+        // the null check and the inference call.
+        val conv: Conversation? = inferenceMutex.withLock { conversation }
+        if (conv == null) return Result.Error("Gemma model not loaded")
 
         return try {
             Logger.d("GemmaPlanner: planning for: $command")
@@ -285,7 +373,9 @@ class GemmaPlanner {
                 }
             } catch (e: TimeoutCancellationException) {
                 Logger.w("GemmaPlanner: inference timed out after ${INFERENCE_TIMEOUT_MS}ms; closing brain")
-                runCatching { close() }
+                // closeInternal() — we're inside inferenceMutex; acquiring loadMutex could deadlock
+                // with a concurrent load() that holds loadMutex and waits for inferenceMutex.
+                runCatching { closeInternal() }
                 return Result.Error("Gemma inference timed out")
             }
 
@@ -351,7 +441,7 @@ class GemmaPlanner {
                 }
             } catch (e: TimeoutCancellationException) {
                 Logger.w("GemmaPlanner: streaming inference timed out after ${INFERENCE_TIMEOUT_MS}ms; closing brain")
-                runCatching { close() }
+                runCatching { closeInternal() }
                 return Result.Error("Gemma inference timed out")
             }
 
@@ -398,7 +488,7 @@ class GemmaPlanner {
                 }
             } catch (e: TimeoutCancellationException) {
                 Logger.w("GemmaPlanner: vision inference timed out after ${INFERENCE_TIMEOUT_MS}ms; closing brain")
-                runCatching { close() }
+                runCatching { closeInternal() }
                 return Result.Error("Gemma vision timed out")
             }
             val text = extractText(responseMessage) ?: ""
@@ -440,7 +530,7 @@ class GemmaPlanner {
                 }
             } catch (e: TimeoutCancellationException) {
                 Logger.w("GemmaPlanner: planNext timed out after ${INFERENCE_TIMEOUT_MS}ms; closing brain")
-                runCatching { close() }
+                runCatching { closeInternal() }
                 return Result.Error("Gemma inference timed out")
             }
             extractValidatedToolCall(responseMessage)
@@ -479,7 +569,7 @@ class GemmaPlanner {
                 }
             } catch (e: TimeoutCancellationException) {
                 Logger.w("GemmaPlanner: judgeSafety timed out after ${INFERENCE_TIMEOUT_MS}ms; closing brain")
-                runCatching { close() }
+                runCatching { closeInternal() }
                 return Result.Error("Gemma judge timed out")
             }
             val text = extractText(responseMessage) ?: ""
@@ -515,7 +605,7 @@ class GemmaPlanner {
                 }
             } catch (e: TimeoutCancellationException) {
                 Logger.w("GemmaPlanner: chat timed out after ${INFERENCE_TIMEOUT_MS}ms; closing brain")
-                runCatching { close() }
+                runCatching { closeInternal() }
                 return Result.Error("Gemma chat timed out")
             }
             val text = extractText(responseMessage) ?: ""
@@ -624,8 +714,23 @@ class GemmaPlanner {
 
     /**
      * Releases the model and conversation. Safe to call multiple times. Clears [loadedSpec].
+     *
+     * Must acquire [loadMutex] to prevent a race with [load] or [resetPlanningConversation].
+     * External callers (ViewModel cleanup, onDestroy) should use [closeAsync] or call this from
+     * a coroutine scope that already holds the appropriate lock.
      */
-    fun close() {
+    suspend fun close() = loadMutex.withLock { closeInternal() }
+
+    /**
+     * Synchronous close for callers that cannot use suspend functions.
+     * Uses [kotlinx.coroutines.runBlocking] to acquire [loadMutex]. Prefer [close] in coroutine contexts.
+     */
+    fun closeSync() = runBlocking { close() }
+
+    /**
+     * Internal close logic. Must only be called while holding [loadMutex].
+     */
+    private fun closeInternal() {
         try {
             conversation?.close()
         } catch (e: Exception) {
@@ -652,6 +757,7 @@ class GemmaPlanner {
         engine = null
         isLoaded = false
         loadedSpec = null
+        lastLoadResult = null
         activeBackend = ""
     }
 
