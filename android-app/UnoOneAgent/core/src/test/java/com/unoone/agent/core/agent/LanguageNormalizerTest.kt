@@ -206,6 +206,7 @@ class LanguageNormalizerTest {
     fun supportedLanguages_containsCoreLanguages() {
         assertTrue("Should contain English", LanguageNormalizer.SUPPORTED_LANGUAGES.contains("en"))
         assertTrue("Should contain Hindi", LanguageNormalizer.SUPPORTED_LANGUAGES.contains("hi"))
+        assertTrue("Should contain Marathi", LanguageNormalizer.SUPPORTED_LANGUAGES.contains("mr"))
         assertTrue("Should contain Bengali", LanguageNormalizer.SUPPORTED_LANGUAGES.contains("bn"))
         assertTrue("Should contain Tamil", LanguageNormalizer.SUPPORTED_LANGUAGES.contains("ta"))
         assertTrue("Should contain Telugu", LanguageNormalizer.SUPPORTED_LANGUAGES.contains("te"))

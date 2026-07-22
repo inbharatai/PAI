@@ -42,7 +42,10 @@ class ActionExecutor(
     private val calendarControl: CalendarControl,
     private val ocrControl: OcrControl,
     private val accessibilityControl: AccessibilityControl,
-    private val agentRouter: AgentRouter
+    private val agentRouter: AgentRouter,
+    /** Supplies the current voice/TTS language code (e.g. "en", "hi") so OCR can select
+     *  the appropriate Indic recognizer alongside Latin for Indic-script screens. M15. */
+    var voiceLanguageProvider: () -> String = { "en" }
 ) : IActionExecutor {
 
     private val dataExporter = DataExporter(context, noteDao, skillDao, memoryDao, actionLogDao)
@@ -540,30 +543,46 @@ class ActionExecutor(
      * read_screen: reads on-screen text via the Accessibility tree only. The pre-execution gate
      * already required Accessibility; we do NOT prompt for MediaProjection mid-execution — that
      * would request access the permission registry never declared for this tool.
+     *
+     * In addition to flat text, includes a structured node list with IDs so the LLM can use
+     * click_accessibility_node / type_into_accessibility_node to target specific nodes.
      */
     private suspend fun readScreenWithAccessibility(): Result<String> {
         val accResult = accessibilityControl.captureScreenText()
-        return when (accResult) {
-            is Result.Success -> if (accResult.data.isNotBlank()) {
-                Result.Success(accResult.data)
-            } else {
-                Result.Error("No readable text on screen")
-            }
-            is Result.Error -> Result.Error(accResult.message)
+        val flatText = when (accResult) {
+            is Result.Success -> accResult.data
+            is Result.Error -> return Result.Error(accResult.message)
         }
+        val structuredNodes = try {
+            (accessibilityControl.captureStructuredTree() as? Result.Success)?.data ?: emptyList()
+        } catch (_: Exception) { emptyList() }
+
+        if (flatText.isBlank() && structuredNodes.isEmpty()) {
+            return Result.Error("No readable text on screen")
+        }
+
+        val parts = mutableListOf<String>()
+        if (flatText.isNotBlank()) parts.add(flatText)
+        if (structuredNodes.isNotEmpty()) {
+            parts.add(com.unoone.agent.core.agent.SceneDescriptionBuilder.formatStructuredNodes(structuredNodes))
+        }
+        return Result.Success(parts.joinToString("\n\n"))
     }
 
     /**
      * ocr_screen: runs OCR on a MediaProjection screenshot. The pre-execution gate already required
      * MediaProjection; we go straight to OCR rather than returning the accessibility tree (which
      * would defeat the purpose of a dedicated OCR tool).
+     *
+     * For Indic voice languages, runs both Latin and Devanagari recognizers so Hindi/Devanagari
+     * text on screen is captured alongside any English text. M15.
      */
     private suspend fun readScreenWithOcr(): Result<String> {
         if (!ScreenshotCapture.hasPermission()) {
             // Should not happen — the gate checks this before execute — but be defensive.
             return Result.Error("Screenshot permission not granted. Grant it in Settings.")
         }
-        return when (val ocrResult = ocrControl.recognizeScreen()) {
+        return when (val ocrResult = ocrControl.recognizeScreen(voiceLanguageProvider())) {
             is Result.Success -> if (ocrResult.data.isNotBlank()) {
                 Result.Success(ocrResult.data)
             } else {
@@ -616,18 +635,24 @@ class ActionExecutor(
         }
 
         // Path 2: OCR + foreground context → SceneDescriptionBuilder.
+        // M15: language-aware OCR — for Indic voice languages, both Latin and Devanagari
+        // recognizers run so Hindi/Devanagari text is captured alongside any English text.
         val contextStr = try { accessibilityControl.getCurrentContext() ?: "" } catch (_: Exception) { "" }
         val pkg = contextStr.substringBefore("/").ifBlank { "" }
         val activity = contextStr.substringAfter("/", "").ifBlank { "" }
         val ocrText = try {
-            (ocrControl.recognizeScreen() as? Result.Success)?.data ?: ""
+            (ocrControl.recognizeScreen(voiceLanguageProvider()) as? Result.Success)?.data ?: ""
         } catch (_: Exception) { "" }
+        val structuredNodes = try {
+            (accessibilityControl.captureStructuredTree() as? Result.Success)?.data ?: emptyList()
+        } catch (_: Exception) { emptyList() }
         val description = com.unoone.agent.core.agent.SceneDescriptionBuilder.build(
             com.unoone.agent.core.agent.SceneInput(
                 currentPackage = pkg,
                 currentActivity = activity,
                 ocrText = ocrText,
-                aspect = aspect
+                aspect = aspect,
+                structuredNodes = structuredNodes
             )
         )
         return Result.Success(description)

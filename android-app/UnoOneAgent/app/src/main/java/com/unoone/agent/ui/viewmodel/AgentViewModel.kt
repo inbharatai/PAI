@@ -234,9 +234,17 @@ class AgentViewModel(
     private fun runOcrAndSpeak() {
         ocrJob?.cancel()
         ocrJob = viewModelScope.launch(Dispatchers.IO) {
+            // M15: language-aware OCR — for Indic voice languages, both Latin and Devanagari
+            // recognizers run so Hindi/Bengali/Tamil/etc. text on screen is captured.
+            val lang = com.unoone.agent.voice.VoiceLanguage.normalize(
+                com.unoone.agent.UnoOneApplication.appContext
+                    .getSharedPreferences(com.unoone.agent.voice.VoiceLanguage.PREF_NAME, android.content.Context.MODE_PRIVATE)
+                    .getString(com.unoone.agent.voice.VoiceLanguage.PREF_KEY, com.unoone.agent.voice.VoiceLanguage.DEFAULT)
+                    ?: com.unoone.agent.voice.VoiceLanguage.DEFAULT
+            )
             // recognizeScreen() calls the blocking ScreenshotCapture.captureScreen() (~500ms poll),
             // so it must run off the main thread.
-            val result = ocrControl.recognizeScreen()
+            val result = ocrControl.recognizeScreen(lang)
             val spoken = when (result) {
                 is Result.Success -> result.data.trim().ifBlank { "I couldn't see any text on the screen." }
                 is Result.Error -> "I couldn't read the screen. ${result.message}"

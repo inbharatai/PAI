@@ -61,8 +61,10 @@ object LanguageNormalizer {
     /** Confidence below this threshold triggers a clarification prompt instead of execution. */
     const val CONFIDENCE_THRESHOLD: Float = 0.5f
 
-    /** Supported language codes for detection and reply. */
-    val SUPPORTED_LANGUAGES: Set<String> = setOf("en", "hi", "bn", "ta", "te", "kn", "ml")
+    /** Supported language codes for detection and reply.
+     *  "mr" (Marathi) shares Devanagari script with Hindi — the Hindi TTS can pronounce
+     *  Marathi text acceptably, and the Devanagari OCR recognizer covers both. */
+    val SUPPORTED_LANGUAGES: Set<String> = setOf("en", "hi", "mr", "bn", "ta", "te", "kn", "ml")
 
     /**
      * Languages where generation quality is degraded or unsupported on-device.
@@ -119,11 +121,21 @@ object LanguageNormalizer {
         "nokku", "kelu", "ezhuthu", "thedi", "inge", "enge"
     )
 
+    // Marathi shares Devanagari script with Hindi; common transliterated Marathi words
+    // that differ from Hindi to help distinguish the two.
+    private val MARATHI_KEYWORDS = setOf(
+        "mee", "tumhi", "kara", "bolwa", "kaay", "nahi", "theek", "achha",
+        "chala", "dakhwa", "aika", "likha", "shodha", "aata", "udya",
+        "maajha", "tumcha", "houn", "naa"
+    )
+
     // Explicit language-switch patterns
     private val LANGUAGE_SWITCH_PATTERNS = mapOf(
         "in english" to "en",
         "in hindi" to "hi",
+        "in marathi" to "mr",
         "हिंदी में" to "hi",
+        "मराठी में" to "mr",
         "अंग्रेजी में" to "en",
         "in tamil" to "ta",
         "in bengali" to "bn",
@@ -223,6 +235,7 @@ object LanguageNormalizer {
 
         val langScores = mutableMapOf<String, Int>(
             "hi" to words.count { it in HINDI_KEYWORDS },
+            "mr" to words.count { it in MARATHI_KEYWORDS },
             "bn" to words.count { it in BENGALI_KEYWORDS },
             "ta" to words.count { it in TAMIL_KEYWORDS },
             "te" to words.count { it in TELUGU_KEYWORDS },

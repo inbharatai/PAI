@@ -6,6 +6,7 @@ import android.graphics.Path
 import android.os.Bundle
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import com.unoone.agent.core.model.StructuredNode
 import com.unoone.agent.core.util.Logger
 import com.unoone.agent.core.runtime.AgentRuntimeGate
 
@@ -304,6 +305,91 @@ class UnoOneAccessibilityService : AccessibilityService() {
 
     private fun performSwipe(sx: Float, sy: Float, ex: Float, ey: Float, duration: Long): Boolean {
         return swipe(sx, sy, ex, ey, duration)
+    }
+
+    /**
+     * Walks the accessibility tree and returns a flat list of [StructuredNode]s
+     * ordered by depth-first traversal. Only visible nodes are included. Skips
+     * nodes that carry no useful signal (no text, no ID, not clickable, not editable)
+     * to keep the output compact for the LLM context window.
+     *
+     * The caller is responsible for capping the list size and total character length.
+     */
+    fun captureStructuredTree(): List<StructuredNode> {
+        val rootNode = rootInActiveWindow ?: return emptyList()
+        val nodes = mutableListOf<StructuredNode>()
+        try {
+            fun traverse(node: AccessibilityNodeInfo, depth: Int) {
+                if (!node.isVisibleToUser) return
+
+                val nodeId = node.viewIdResourceName
+                val text = node.text?.toString()?.ifBlank { null }
+                    ?: node.contentDescription?.toString()?.ifBlank { null }
+                    ?: node.hintText?.toString()?.ifBlank { null }
+                val clickable = node.isClickable || node.isEditable
+                val editable = node.isEditable
+
+                // Skip nodes that carry no useful signal for the LLM:
+                // no ID, no text, not clickable, not editable, not a checkable/important container.
+                if (nodeId != null || text != null || clickable || editable || node.isCheckable) {
+                    val boundsRect = android.graphics.Rect()
+                    node.getBoundsInScreen(boundsRect)
+                    val boundsStr = "${boundsRect.left},${boundsRect.top}-${boundsRect.right},${boundsRect.bottom}"
+                    nodes.add(
+                        StructuredNode(
+                            nodeId = nodeId,
+                            text = text ?: "",
+                            type = inferNodeType(node),
+                            clickable = node.isClickable || editable,
+                            bounds = boundsStr,
+                            depth = depth
+                        )
+                    )
+                }
+
+                for (i in 0 until node.childCount) {
+                    val child = node.getChild(i)
+                    if (child != null) {
+                        traverse(child, depth + 1)
+                        child.recycle()
+                    }
+                }
+            }
+            traverse(rootNode, 0)
+        } finally {
+            rootNode.recycle()
+        }
+        return nodes
+    }
+
+    /** Infers a short human-readable node type from the class name. */
+    private fun inferNodeType(node: AccessibilityNodeInfo): String {
+        val cls = node.className?.toString() ?: return "view"
+        return when {
+            cls.contains("Button", ignoreCase = true) -> "button"
+            cls.contains("EditText", ignoreCase = true) -> "edit"
+            cls.contains("TextView", ignoreCase = true) -> "text"
+            cls.contains("ImageView", ignoreCase = true) -> "image"
+            cls.contains("CheckBox", ignoreCase = true) -> "checkbox"
+            cls.contains("Switch", ignoreCase = true) || cls.contains("Toggle", ignoreCase = true) -> "switch"
+            cls.contains("RadioButton", ignoreCase = true) -> "radio"
+            cls.contains("Spinner", ignoreCase = true) -> "spinner"
+            cls.contains("RecyclerView", ignoreCase = true) -> "recycler"
+            cls.contains("ListView", ignoreCase = true) -> "list"
+            cls.contains("ScrollView", ignoreCase = true) -> "scroll"
+            cls.contains("ViewPager", ignoreCase = true) -> "pager"
+            cls.contains("Toolbar", ignoreCase = true) || cls.contains("ActionBar", ignoreCase = true) -> "toolbar"
+            cls.contains("ImageView", ignoreCase = true) -> "image"
+            cls.contains("ImageButton", ignoreCase = true) -> "button"
+            cls.contains("WebView", ignoreCase = true) -> "web"
+            cls.contains("SeekBar", ignoreCase = true) || cls.contains("ProgressBar", ignoreCase = true) -> "progress"
+            cls.contains("CardView", ignoreCase = true) -> "card"
+            cls.contains("FrameLayout", ignoreCase = true)
+                || cls.contains("LinearLayout", ignoreCase = true)
+                || cls.contains("ConstraintLayout", ignoreCase = true)
+                || cls.contains("RelativeLayout", ignoreCase = true) -> "container"
+            else -> "view"
+        }
     }
 
     companion object {

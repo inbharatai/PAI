@@ -189,7 +189,11 @@ class AgentOrchestrator(
         ocrControl = ocrControl,
         accessibilityControl = accessibilityControl,
         agentRouter = com.unoone.agent.agentrouter.AgentRouter()
-    )
+    ).apply {
+        // M15: language-aware OCR — Indic voice languages trigger both Latin and Devanagari
+        // recognizers so Hindi/Bengali/Tamil/etc. text on screen is no longer invisible.
+        voiceLanguageProvider = { currentVoiceLanguageCode() }
+    }
     private val safetyPipeline = SafetyPipeline(
         context = context,
         safetyGuard = com.unoone.agent.safetyguard.SafetyGuard()

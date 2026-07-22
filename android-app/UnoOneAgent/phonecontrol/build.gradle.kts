@@ -27,7 +27,13 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     
     // On-device OCR via bundled ML Kit text-recognition.
+    // Latin script recognizer (default — handles English and other Latin-script text).
     implementation("com.google.mlkit:text-recognition:16.0.0")
+    // Indic script recognizer (Devanagari — handles Hindi, Marathi, Nepali, and other
+    // Devanagari-script languages). Used alongside the Latin recognizer when the active
+    // voice language is an Indic language, so Hindi/Bengali/Tamil/etc. text on screen
+    // is no longer invisible to OCR. M15: describe_scene missing Indic script OCR.
+    implementation("com.google.mlkit:text-recognition-devanagari:16.0.0")
 
     // Labeled, fully offline COCO object detection for Blind Aid.
     //noinspection GradleDependency -- Google publishes a legacy date-version that sorts above

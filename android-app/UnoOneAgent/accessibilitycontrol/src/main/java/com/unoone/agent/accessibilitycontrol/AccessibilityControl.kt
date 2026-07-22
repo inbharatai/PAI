@@ -1,6 +1,7 @@
 package com.unoone.agent.accessibilitycontrol
 
 import com.unoone.agent.core.model.Result
+import com.unoone.agent.core.model.StructuredNode
 import com.unoone.agent.core.util.InputSanitizer
 import com.unoone.agent.core.util.Logger
 import kotlinx.coroutines.delay
@@ -235,5 +236,17 @@ class AccessibilityControl {
             ?: return Result.Error("Accessibility Service not enabled")
         return if (service.longPressNodeById(nodeId)) Result.Success(Unit)
         else Result.Error("Could not long-press node: $nodeId")
+    }
+
+    /**
+     * Captures a structured accessibility tree: a list of [StructuredNode]s with IDs,
+     * text, type, clickability, bounds, and depth. Returns up to [maxNodes] nodes,
+     * capped to keep the LLM context window manageable.
+     */
+    fun captureStructuredTree(maxNodes: Int = 30): Result<List<StructuredNode>> {
+        val service = UnoOneAccessibilityService.getInstance()
+            ?: return Result.Error("Accessibility Service not enabled")
+        val allNodes = service.captureStructuredTree()
+        return Result.Success(allNodes.take(maxNodes))
     }
 }
