@@ -13,18 +13,23 @@ import com.unoone.agent.core.model.onError
 import com.unoone.agent.core.model.ToolCall
 import com.unoone.agent.core.model.getOrNull
 import com.unoone.agent.core.model.compoundSteps
-import com.unoone.agent.core.agent.LoopDecision
-import com.unoone.agent.core.agent.ReActLoopController
-import com.unoone.agent.core.agent.SafetyJudgePolicy
+import com.unoone.agent.core.agent.ActionVerifier
+import com.unoone.agent.core.agent.BlindAidNarrator
+import com.unoone.agent.core.agent.BrainHealthPolicy
 import com.unoone.agent.core.agent.IntentClassifier
 import com.unoone.agent.core.agent.IntentType
+import com.unoone.agent.core.agent.LoopDecision
 import com.unoone.agent.core.agent.NarrationPolicy
+import com.unoone.agent.core.agent.ObservationBuilder
+import com.unoone.agent.core.agent.ReActLoopController
+import com.unoone.agent.core.agent.SafetyJudgePolicy
 import com.unoone.agent.core.agent.StopReason
 import com.unoone.agent.core.agent.ToolHealthTracker
-import com.unoone.agent.core.agent.BrainHealthPolicy
-import com.unoone.agent.core.agent.BlindAidNarrator
-import com.unoone.agent.core.agent.VoiceResponseLocalizer
 import com.unoone.agent.core.agent.VoiceFastReply
+import com.unoone.agent.core.agent.VoiceResponseLocalizer
+import com.unoone.agent.core.model.ActionResult
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import com.unoone.agent.core.safety.PermissionRequirement
 import com.unoone.agent.core.util.CallbackMulticast
 import com.unoone.agent.core.util.ConfirmationListener
@@ -960,8 +965,9 @@ class AgentOrchestrator(
                         return
                     }
 
-                    // Step 6: Feedback & Verification
-                    val observation = if (result is Result.Success) result.data.toString() else "Action completed."
+                    // Step 6: Feedback & Verification — use ActionVerifier for structured evidence
+                    val (_, observation) = verifyAndBuildObservation(toolCall.tool, result)
+                    lastToolCall = toolCall
 
                     // ReAct continuation: when the LLM (not the rule path) planned the first call AND
                     // the tool's result is something the model can reason over, feed the observation
@@ -1250,8 +1256,9 @@ class AgentOrchestrator(
                                 ))
                                 return lastObservation
                             }
-                            // Success → observe and let the controller decide whether to continue.
-                            lastObservation = if (execResult is Result.Success) execResult.data.toString() else "Action completed."
+                            // Success → verify and build a structured observation for the model.
+                            val (_, reActObservation) = verifyAndBuildObservation(decision.call.tool, execResult)
+                            lastObservation = reActObservation
                             lastCall = decision.call
                             stepsExecuted++
                         }
@@ -1479,6 +1486,71 @@ class AgentOrchestrator(
         }
         return StepOutcome.Executed(result)
     }
+
+    /**
+     * Verifies a tool execution result using [ActionVerifier] and builds a structured observation
+     * via [ObservationBuilder]. This is the "Observe" half of the ReAct loop — the model sees
+     * verified evidence (not just a success/failure string), which improves multi-step reasoning.
+     *
+     * For [ActionVerifier.FOREGROUND_VERIFICATION_TOOLS] (app launches, browser opens), checks
+     * the foreground package to confirm the expected app came to the front.
+     * For [ActionVerifier.DETERMINISTIC_TOOLS] (accessibility actions), marks success based on
+     * whether the AccessibilityService call succeeded.
+     * For all other tools, creates an unverified result — we cannot independently verify the outcome.
+     */
+    private fun verifyAndBuildObservation(tool: String, result: Result<String>): Pair<ActionResult, String> {
+        val actionResult = when {
+            result is Result.Error -> ActionResult.failed(
+                tool = tool,
+                userMessage = result.message,
+                recoverableError = null // Error classification is a future enhancement
+            )
+            tool in ActionVerifier.FOREGROUND_VERIFICATION_TOOLS -> {
+                val foreground = accessibilityControl.getCurrentPackage() ?: ""
+                // Build expected package set from tool args (for open_app, the package_name arg)
+                val expectedPackages = when (tool) {
+                    "open_app" -> setOfNotNull(
+                        lastToolCall?.args?.get("package_name")?.jsonPrimitive?.contentOrNull
+                    )
+                    else -> setOf(forecastExpectedPackage(tool))
+                }
+                ActionVerifier.verifyForegroundLaunch(
+                    tool = tool,
+                    userMessage = (result as Result.Success).data.take(ObservationBuilder.MAX_OBSERVATION_CHARS),
+                    expectedPackages = expectedPackages,
+                    actualForeground = foreground
+                )
+            }
+            tool in ActionVerifier.DETERMINISTIC_TOOLS -> {
+                ActionVerifier.verifyDeterministicAction(
+                    tool = tool,
+                    userMessage = (result as Result.Success).data.take(ObservationBuilder.MAX_OBSERVATION_CHARS),
+                    actionSucceeded = true // if we got here, the AccessibilityService call didn't throw
+                )
+            }
+            else -> ActionResult.unverified(
+                tool = tool,
+                userMessage = (result as Result.Success).data.take(ObservationBuilder.MAX_OBSERVATION_CHARS)
+            )
+        }
+        return Pair(actionResult, ObservationBuilder.buildConcise(actionResult))
+    }
+
+    /** Maps known tool names to their expected foreground package. */
+    private fun forecastExpectedPackage(tool: String): String = when (tool) {
+        "open_chrome" -> "com.android.chrome"
+        "open_calendar" -> "com.google.android.calendar"
+        "open_camera" -> "com.android.camera"
+        "open_dialer" -> "com.google.android.dialer"
+        "draft_whatsapp_message", "send_prepared_whatsapp" -> "com.whatsapp"
+        "draft_email" -> "com.google.android.gm"
+        "open_url" -> "com.android.chrome"
+        "open_settings" -> "com.android.settings"
+        else -> "" // unknown — verification will use whatever is in the foreground
+    }
+
+    /** The last tool call executed, for use in verification. */
+    private var lastToolCall: ToolCall? = null
 
     private suspend fun awaitConfirmation(message: String): Boolean {
         // Prefer multicast if listeners are registered (both Activity and FloatingService)

@@ -185,11 +185,11 @@ class ModelTierSelectorTest {
 
     @Test
     fun compound_intent_returnsLite_whenRamBelowE4bThreshold() {
-        // Device has 8GB RAM (< 10240MB threshold)
+        // Device has 7GB available RAM (< 8192MB E4B minimum)
         val result = ModelTierSelector.select(
             CandidateToolSelector.TaskIntent.MESSAGING,
             e4bAvailable = true,
-            availableRamMb = 8_192
+            availableRamMb = 7_168
         )
         assertEquals(ModelProfiles.LITE, result)
     }
