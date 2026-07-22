@@ -140,12 +140,14 @@ object RuleBasedParser {
                 ))
             )
 
-            // WhatsApp Integration — prepare a draft only; the user presses Send in WhatsApp.
-            // Without a spoken phone number, WhatsApp's own recipient picker is opened instead of
-            // inventing or learning a contact mapping.
+            // WhatsApp Integration — resolve contact + draft message (prefer over send_whatsapp).
+            // Without a spoken phone number, use the contact name for WhatsApp's recipient picker.
             lowered.contains("whatsapp") &&
                 hasAnyWord(lowered, "message", "text", "write", "draft", "send", "saying", "say") -> {
                 val number = Regex("(?:to|at) ([+]?[\\d]{8,15})").find(lowered)?.groupValues?.get(1) ?: ""
+                val contactName = Regex("(?:to|at) ([\\p{L}\\s]+?)(?:\\s+(?:saying|message|text|say|that)\\b)", RegexOption.IGNORE_CASE)
+                    .find(command)?.groupValues?.get(1)?.trim()?.ifBlank { null }
+                    ?: ""
                 val message = Regex(
                     "\\b(?:saying|message|text|say)\\b\\s*(.+)$",
                     RegexOption.IGNORE_CASE
@@ -154,9 +156,9 @@ object RuleBasedParser {
                     ?.let { Regex("^[+\\d][\\d\\s-]{7,}\\s*").replace(it, "").trim() }
                     .orEmpty()
                 ToolCall(
-                    "send_whatsapp",
+                    "draft_whatsapp_message",
                     JsonObject(mapOf(
-                        "number" to JsonPrimitive(number),
+                        "contact_name" to JsonPrimitive(contactName.ifBlank { number.ifBlank { "" } }),
                         "message" to JsonPrimitive(message)
                     ))
                 )
@@ -172,19 +174,24 @@ object RuleBasedParser {
                 "show calendar app", "show the calendar app"
             ) -> ToolCall("open_calendar", JsonObject(emptyMap()))
 
-            // Calendar Intelligence
+            // Calendar Intelligence — use atomic tools (prefer over open_calendar_insert)
             lowered.contains("calendar") || lowered.contains("schedule") || lowered.contains("events") ||
                 lowered.startsWith("remind me ") -> {
-                if (lowered.contains("check") || lowered.contains("what") || lowered.contains("show") || lowered.contains("read")) {
-                    ToolCall("check_calendar", JsonObject(emptyMap()))
+                if (lowered.contains("check") || lowered.contains("what") || lowered.contains("show") || lowered.contains("read") || lowered.contains("conflict") || lowered.contains("free") || lowered.contains("busy")) {
+                    ToolCall("check_calendar_conflict", JsonObject(mapOf(
+                        "date" to JsonPrimitive(""),
+                        "start_time" to JsonPrimitive(""),
+                        "end_time" to JsonPrimitive("")
+                    )))
                 } else if (
                     lowered.contains("add") || lowered.contains("book") || lowered.contains("create") ||
                     lowered.contains("insert") || lowered.contains("schedule") ||
                     lowered.startsWith("remind me ")
                 ) {
                     val details = CalendarCommandParser.parse(command)
-                    ToolCall("open_calendar_insert", JsonObject(mapOf(
+                    ToolCall("create_calendar_event", JsonObject(mapOf(
                         "title" to JsonPrimitive(details.title),
+                        "date" to JsonPrimitive(""),
                         "start_time" to JsonPrimitive(details.startTimeIso.orEmpty()),
                         "end_time" to JsonPrimitive(details.endTimeIso.orEmpty())
                     )))
@@ -314,24 +321,24 @@ object RuleBasedParser {
                 ToolCall("read_screen", JsonObject(emptyMap()))
             }
 
-            // Navigation & Gestures
+            // Navigation & Gestures — atomic tools (prefer over system_control)
             lowered.contains("scroll down") || lowered.contains("page down") -> {
-                ToolCall("system_control", JsonObject(mapOf("action" to JsonPrimitive("scroll_down"), "target" to JsonPrimitive(""))))
+                ToolCall("scroll", JsonObject(mapOf("direction" to JsonPrimitive("down"))))
             }
             lowered.contains("scroll up") || lowered.contains("page up") -> {
-                ToolCall("system_control", JsonObject(mapOf("action" to JsonPrimitive("scroll_up"), "target" to JsonPrimitive(""))))
+                ToolCall("scroll", JsonObject(mapOf("direction" to JsonPrimitive("up"))))
             }
             lowered.contains("go back") || lowered.contains("press back") || lowered.contains("navigate back") -> {
-                ToolCall("system_control", JsonObject(mapOf("action" to JsonPrimitive("go_back"), "target" to JsonPrimitive(""))))
+                ToolCall("go_back", JsonObject(emptyMap()))
             }
             lowered.contains("go home") || lowered.contains("press home") || lowered.contains("go to home") -> {
-                ToolCall("system_control", JsonObject(mapOf("action" to JsonPrimitive("go_home"), "target" to JsonPrimitive(""))))
+                ToolCall("go_home", JsonObject(emptyMap()))
             }
             lowered.contains("open notification") || lowered.contains("show notification") -> {
-                ToolCall("system_control", JsonObject(mapOf("action" to JsonPrimitive("open_notifications"), "target" to JsonPrimitive(""))))
+                ToolCall("open_notifications", JsonObject(emptyMap()))
             }
             lowered.contains("open recent") || lowered.contains("show recent") -> {
-                ToolCall("system_control", JsonObject(mapOf("action" to JsonPrimitive("open_recents"), "target" to JsonPrimitive(""))))
+                ToolCall("open_recents", JsonObject(emptyMap()))
             }
             lowered.contains("swipe left") -> {
                 ToolCall("system_control", JsonObject(mapOf("action" to JsonPrimitive("swipe"), "target" to JsonPrimitive("left"))))
@@ -502,8 +509,9 @@ object RuleBasedParser {
             command.contains("कैलेंडर") &&
                 hasAny("जोड़ो", "बनाओ", "लगाओ", "रिमाइंडर") -> {
                 val details = CalendarCommandParser.parse(command)
-                ToolCall("open_calendar_insert", JsonObject(mapOf(
+                ToolCall("create_calendar_event", JsonObject(mapOf(
                     "title" to JsonPrimitive(details.title),
+                    "date" to JsonPrimitive(""),
                     "start_time" to JsonPrimitive(details.startTimeIso.orEmpty()),
                     "end_time" to JsonPrimitive(details.endTimeIso.orEmpty())
                 )))
@@ -535,8 +543,8 @@ object RuleBasedParser {
                     .ifBlank { command.substringAfter("मैसेज", "") }
                     .ifBlank { command.substringAfter("संदेश", "") }
                     .trim()
-                ToolCall("send_whatsapp", JsonObject(mapOf(
-                    "number" to JsonPrimitive(number),
+                ToolCall("draft_whatsapp_message", JsonObject(mapOf(
+                    "contact_name" to JsonPrimitive(number.ifBlank { "" }),
                     "message" to JsonPrimitive(message)
                 )))
             }
