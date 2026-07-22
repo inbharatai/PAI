@@ -10,9 +10,11 @@ import com.google.ai.edge.litertlm.EngineConfig
 import com.google.ai.edge.litertlm.Message
 import com.google.ai.edge.litertlm.tool
 import com.unoone.agent.core.model.BackendPreference
+import com.unoone.agent.core.model.BrainModelId
 import com.unoone.agent.core.model.BrainModelSpec
 import com.unoone.agent.core.model.CanonicalToolRegistry
 import com.unoone.agent.core.model.ModelFamily
+import com.unoone.agent.core.model.ModelLoadResult
 import com.unoone.agent.core.model.ModelProfile
 import com.unoone.agent.core.model.Result
 import com.unoone.agent.core.model.ToolCall
@@ -88,6 +90,15 @@ class GemmaPlanner {
     @Volatile
     private var loadedSpec: BrainModelSpec? = null
 
+    /**
+     * The last [ModelLoadResult] for the current or most recent load attempt.
+     * Records the actual backend (GPU/NPU/CPU), load time, and available RAM.
+     * Used by [ModelTierSelector] to decide whether E4B is viable on this device.
+     * Null before the first load attempt.
+     */
+    @Volatile
+    private var lastLoadResult: ModelLoadResult? = null
+
     /** Serializes loads so two concurrent callers can't both close + reinitialize (leaking an engine). */
     private val loadMutex = Mutex()
 
@@ -110,6 +121,9 @@ class GemmaPlanner {
 
     /** The currently loaded brain profile, or null. */
     fun loadedProfile(): BrainModelSpec? = loadedSpec
+
+    /** The last model load result, or null if no load has been attempted. */
+    fun lastLoadResult(): ModelLoadResult? = lastLoadResult
 
     /**
      * Reset the planning conversation for a new task. Creates a fresh [Conversation] from the same
@@ -191,6 +205,10 @@ class GemmaPlanner {
                 val (newEngine, backend) = tryLoadBackends(modelPath, backends)
                     ?: run {
                         lastLoadError = "${spec.displayName} failed to load on any backend (${backendsNames(backends)})"
+                        lastLoadResult = ModelLoadResult.failed(
+                            modelId = spec.id,
+                            errorMessage = lastLoadError
+                        )
                         return@withLock Result.Error(lastLoadError)
                     }
 
@@ -247,6 +265,13 @@ class GemmaPlanner {
                 activeBackend = backend
                 loadedSpec = spec
                 isLoaded = true
+                lastLoadResult = ModelLoadResult.loaded(
+                    modelId = spec.id,
+                    backend = backend,
+                    loadTimeMs = System.currentTimeMillis() - loadStart,
+                    availableRamMb = 0, // Caller should update with actual ActivityManager data
+                    profile = com.unoone.agent.core.model.ModelProfiles.forId(spec.id)
+                )
                 Logger.i("GemmaPlanner: ${spec.displayName} loaded on $backend backend, conversation ready")
                 com.unoone.agent.observability.Diagnostics.recordModelLoadTime(System.currentTimeMillis() - loadStart)
                 Result.Success(Unit)
@@ -258,6 +283,10 @@ class GemmaPlanner {
                 activeBackend = ""
                 loadedSpec = null
                 lastLoadError = e.message ?: "Unknown load error"
+                lastLoadResult = ModelLoadResult.failed(
+                    modelId = spec.id,
+                    errorMessage = lastLoadError
+                )
                 Result.Error("Failed to load ${spec.displayName}: ${e.message}", e)
             }
         }
@@ -266,7 +295,7 @@ class GemmaPlanner {
     /** Maps a profile's [BackendPreference] to the ordered LiteRT-LM backends to attempt. */
     private fun backendsToTry(pref: BackendPreference): List<Backend> = when (pref) {
         BackendPreference.CPU_ONLY -> listOf(Backend.CPU())
-        BackendPreference.GPU_FIRST, BackendPreference.ANY -> listOf(Backend.GPU(), Backend.CPU())
+        BackendPreference.GPU_FIRST, BackendPreference.ANY -> listOf(Backend.GPU(), Backend.NPU(), Backend.CPU())
     }
 
     private fun backendsNames(backends: List<Backend>): String =
@@ -705,6 +734,7 @@ class GemmaPlanner {
         engine = null
         isLoaded = false
         loadedSpec = null
+        lastLoadResult = null
         activeBackend = ""
     }
 
