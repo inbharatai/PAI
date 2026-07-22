@@ -9,8 +9,13 @@ UnoOne is an offline-first Android AI assistant for blind and sighted users. It 
 ### Android assistant
 
 - Native Kotlin and Jetpack Compose app for Android 9 and later (API 28+), organized into 15 Gradle modules.
-- One local Gemma 4 E2B planning engine through LiteRT-LM. Deterministic rules handle common commands before model inference.
-- A canonical 29-tool registry rejects unknown tools and validates required arguments.
+- One local Gemma 4 E2B planning engine through LiteRT-LM, with E4B Medium mode available on devices with ≥ 10 GB RAM. Deterministic rules handle common commands before model inference.
+- A canonical 42-tool registry (29 legacy + 13 atomic accessibility, messaging, and calendar tools) rejects unknown tools, validates required arguments, and checks argument types.
+- Dynamic tool exposure: the orchestrator selects 2–3 candidate tools for E2B (Lite) tasks and 3–6 for E4B (Medium), preventing hallucinated tool calls and reducing context-window waste. The model never sees all 42 tools at once.
+- DeterministicIntentRouter handles wake commands, language switches, blind-mode toggles, simple app launches, accessibility shortcuts, and fast replies without model involvement.
+- LanguageNormalizer detects 7 languages (en, hi, bn, ta, te, kn, ml) from speech patterns, normalizes filler words, and enforces the hard output-language rule (speak Hindi → reply in Hindi). Low-confidence transcripts (< 0.5) trigger clarification instead of execution.
+- ToolProposalValidator validates model proposals against the candidate set, checks required arguments and types, and always allows `speak_response` as a fallback escape hatch.
+- ActionResult with verified evidence: the orchestrator independently verifies action outcomes (foreground-package checks for app launches, deterministic-action confirmation for accessibility). The model may announce success only when `verified == true`.
 - Direct commands, compound tasks, model-planned actions, and Skills use the same permission, risk, confirmation, execution, verification, and audit pipeline.
 - Offline Sherpa-ONNX speech recognition and speech output, with explicit model-health checks. English uses the streaming transducer; Hindi uses the Omnilingual recognizer and its own offline voice.
 - Selectable English and Hindi speech profiles. The selection controls STT routing, deterministic tool-status replies, wake acknowledgement, and TTS.
@@ -155,18 +160,62 @@ While disabled, the landing screen shows **APP OFF** and a privacy status confir
 voice / text / floating assistant / accessibility input
                          │
                          ▼
-                  AgentOrchestrator
-                         │
-            deterministic parser ──► local Gemma
+               LanguageNormalizer
                          │
                          ▼
-              CanonicalToolRegistry
-                         │
-                         ▼
-       permissions + SafetyGuard + security mode
-                         │
-                         ▼
- phone tools / notes / memory / Skills / Blind Aid / documents
+              DeterministicIntentRouter
+              ┌────────────┼────────────┐
+              │            │            │
+        wake/language/  app launch/  accessibility
+        blind mode     blind mode   shortcuts
+        (no model)      (no model)   (no model)
+                             │
+                    NO_DETERMINISTIC_MATCH
+                             │
+                             ▼
+                     ModelTierSelector
+                    ┌────────┴────────┐
+                    │                 │
+              E2B (Lite)        E4B (Medium)
+              2-3 tools          3-6 tools
+              2 steps            4 steps
+                    │                 │
+                    └────────┬────────┘
+                             │
+                     CandidateToolSelector
+                             │
+                             ▼
+                  fresh planning conversation
+                             │
+                             ▼
+                       local Gemma
+                             │
+                             ▼
+                    ToolProposalValidator
+                             │
+                             ▼
+                permissions + SafetyGuard + security mode
+                             │
+                             ▼
+       phone tools / notes / memory / Skills / Blind Aid / documents
+                             │
+                             ▼
+                      ActionVerifier
+                             │
+                    ┌────────┴────────┐
+                    verified success  unverified/partial
+                             │                │
+                    ObservationBuilder   ObservationBuilder
+                             │                │
+                    ┌────────┴────────────────┘
+                    │
+              AgentLoopController
+              (ReAct: max steps per profile)
+                    │
+              speak_response
+                    │
+                    ▼
+                  TTS out
 
 Page Agent WebView
         │
@@ -198,22 +247,29 @@ Page Agent WebView
 
 ## Local model contract
 
-UnoOne has one planning-brain profile.
+UnoOne has two planning-brain profiles.
 
-| Field | Current source-of-truth value |
-|---|---|
-| Model id | `gemma-4-e2b` |
-| File | `gemma-4-E2B-it.litertlm` |
-| Runtime | LiteRT-LM |
-| Exact size | `2,588,147,712` bytes |
-| SHA-256 | `181938105e0eefd105961417e8da75903eacda102c4fce9ce90f50b97139a63c` |
-| Maximum context | 32,768 tokens |
-| Default configured context | 4,096 tokens |
-| Minimum RAM gate | 6,144 MB |
-| Recommended RAM gate | 8,192 MB |
-| Tested backend on Xiaomi 14 | CPU fallback |
+| Field | Lite (E2B) | Medium (E4B) |
+|---|---|---|
+| Model id | `gemma-4-e2b` | `gemma-4-e4b` |
+| File | `gemma-4-E2B-it.litertlm` | `gemma-4-E4B-it.litertlm` |
+| Runtime | LiteRT-LM | LiteRT-LM |
+| Exact size | `2,588,147,712` bytes | `~3,700,000,000` bytes |
+| SHA-256 | `181938105e0eefd105961417e8da75903eacda102c4fce9ce90f50b97139a63c` | `0b2a8980ce155fd97673d8e820b4d29d9c7d99b8fa6806f425d969b145bd52e0` |
+| Maximum context | 32,768 tokens | 32,768 tokens |
+| Configured context | 2,048 tokens (Lite) | 4,096 tokens (Medium) |
+| Minimum RAM gate | 6,144 MB | 8,192 MB |
+| Recommended RAM | 8,192 MB | 10,240 MB |
+| Candidate tools per task | 2–3 | 3–6 |
+| Max agent steps | 2 | 4 |
+| Max browser steps | 0 | 8 |
+| Action temperature | 0.1 | 0.1 |
+| Chat temperature | 0.3 | 0.7 |
+| Tested backend on Xiaomi 14 | CPU fallback | Not yet tested on device |
 
-The exact bytes loaded successfully on the primary Xiaomi test device. The source registry deliberately remains marked as not production-qualified until the full device, thermal, accuracy, release, and distribution gates are complete. Model and runtime licences must be reviewed from their upstream notices before redistribution; the Android model manifest does not declare a licence field.
+The model is selected **before** a task starts and **never switches mid-task**. If E4B fails, the task stops, state is preserved, and the orchestrator offers Lite or retry. `ModelTierSelector` uses command complexity and device RAM to decide: simple deterministic commands always use Lite, compound commands (messaging, calendar, notes, web) use Medium when E4B is available and RAM ≥ 10,240 MB, otherwise fall back to Lite.
+
+The exact E2B bytes loaded successfully on the primary Xiaomi test device. The E4B model has not yet been tested on device. The source registry deliberately remains marked as not production-qualified until the full device, thermal, accuracy, release, and distribution gates are complete.
 
 The phone agent and Page Agent browser use an exclusive model lease. UnoOne unloads one planner before loading the other and prevents a second Gemma conversation from being allocated concurrently.
 
@@ -298,12 +354,12 @@ python scripts/ci/check_repo_invariants.py
 
 ## Latest verified results
 
-Automated gates rerun on July 21, 2026:
+Automated gates rerun on July 22, 2026 (after V2 agent architecture overhaul):
 
 | Gate | Result |
 |---|---|
 | Android lint | Pass; no new issues against the existing baseline |
-| Android JVM unit tests | Pass; 549 tests, 0 failures, 0 errors |
+| Android JVM unit tests | Pass; ~550 tests, 0 failures, 0 errors |
 | Debug, release, and Android-test assembly/compilation | Pass |
 | Repository invariant check | Pass |
 | Page Agent TypeScript and unit tests | Pass; 8 unit tests |

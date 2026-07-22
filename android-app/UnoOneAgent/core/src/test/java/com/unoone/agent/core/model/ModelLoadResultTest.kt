@@ -109,12 +109,14 @@ class ModelLoadResultTest {
     }
 
     @Test
-    fun failed_defaultRamIsZero() {
+    fun failed_defaultRamIsMinusOne() {
+        // -1 is the sentinel for "unknown" — callers should check for -1 before using
+        // availableRamMb to decide model tier, not treat 0 as "insufficient RAM".
         val result = ModelLoadResult.failed(
             modelId = BrainModelId.GEMMA_4_E2B,
             errorMessage = "Load error"
         )
-        assertEquals(0, result.availableRamMb)
+        assertEquals(-1, result.availableRamMb)
     }
 
     // ── Edge cases ──────────────────────────────────────────────────────

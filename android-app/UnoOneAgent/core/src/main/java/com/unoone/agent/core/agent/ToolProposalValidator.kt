@@ -2,6 +2,7 @@ package com.unoone.agent.core.agent
 
 import com.unoone.agent.core.model.CanonicalToolRegistry
 import com.unoone.agent.core.model.ToolCall
+import com.unoone.agent.core.model.ToolParamType
 import com.unoone.agent.core.model.ToolSchema
 
 /**
@@ -71,6 +72,37 @@ object ToolProposalValidator {
                         "Missing required argument '${param.name}' for tool '$toolName'"
                     )
                 }
+            }
+        }
+
+        // Check 4: Are argument types correct?
+        // Verify that each provided argument's JsonElement type matches the declared param type.
+        for (param in schema.params) {
+            val argValue = call.args[param.name] ?: continue // null args handled by Check 3
+            val typeMatch = when (param.type) {
+                ToolParamType.STRING -> argValue is kotlinx.serialization.json.JsonPrimitive && argValue.isString
+                        || (argValue is kotlinx.serialization.json.JsonPrimitive &&
+                            argValue.content?.toIntOrNull() != null &&
+                            !argValue.isString)
+                    // Accept string primitives; also accept unquoted number-as-string for
+                    // model convenience (e.g. "direction": "down" is a string).
+                ToolParamType.INT -> argValue is kotlinx.serialization.json.JsonPrimitive &&
+                    argValue.content?.toIntOrNull() != null && !argValue.isString
+                ToolParamType.BOOLEAN -> argValue is kotlinx.serialization.json.JsonPrimitive &&
+                    (argValue.content == "true" || argValue.content == "false")
+                ToolParamType.FLOAT -> argValue is kotlinx.serialization.json.JsonPrimitive &&
+                    argValue.content?.toFloatOrNull() != null && !argValue.isString
+                ToolParamType.DOUBLE -> argValue is kotlinx.serialization.json.JsonPrimitive &&
+                    argValue.content?.toDoubleOrNull() != null && !argValue.isString
+                ToolParamType.STRING_LIST -> argValue is kotlinx.serialization.json.JsonArray
+            }
+            // If type doesn't match, reject. For STRING params, be lenient: accept any JsonPrimitive
+            // since the model sometimes wraps strings in quotes inconsistently.
+            if (!typeMatch && param.type != ToolParamType.STRING) {
+                return ValidationResult.Rejected(
+                    call,
+                    "Type mismatch for argument '${param.name}' in tool '$toolName': expected ${param.type}, got ${argValue::class.simpleName}"
+                )
             }
         }
 

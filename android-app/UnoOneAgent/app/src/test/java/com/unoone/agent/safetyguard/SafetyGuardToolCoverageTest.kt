@@ -29,8 +29,8 @@ class SafetyGuardToolCoverageTest {
             "open_url" to RiskLevel.CONFIRM,
             "open_camera" to RiskLevel.CONFIRM,
             "system_control" to RiskLevel.STRONG_CONFIRM,
-            "read_screen" to RiskLevel.CONFIRM,
-            "ocr_screen" to RiskLevel.CONFIRM,
+            "read_screen" to RiskLevel.STRONG_CONFIRM,
+            "ocr_screen" to RiskLevel.STRONG_CONFIRM,
             "create_skill" to RiskLevel.CONFIRM,
             "draft_email" to RiskLevel.STRONG_CONFIRM,
             "send_whatsapp" to RiskLevel.STRONG_CONFIRM,
@@ -60,7 +60,7 @@ class SafetyGuardToolCoverageTest {
             "long_press_accessibility_node" to RiskLevel.CONFIRM,
             // --- Messaging tools (prefer over send_whatsapp) ---
             "resolve_contact" to RiskLevel.DIRECT,
-            "draft_whatsapp_message" to RiskLevel.CONFIRM,
+            "draft_whatsapp_message" to RiskLevel.STRONG_CONFIRM,
             "send_prepared_whatsapp" to RiskLevel.STRONG_CONFIRM,
             // --- Calendar tools (prefer over open_calendar_insert) ---
             "check_calendar_conflict" to RiskLevel.DIRECT,
@@ -80,7 +80,8 @@ class SafetyGuardToolCoverageTest {
         val destructiveTools = listOf(
             "delete_notes", "delete_all_notes", "export_data",
             "detect_objects", "draft_email", "send_whatsapp", "send_prepared_whatsapp",
-            "system_control", "describe_scene"
+            "system_control", "describe_scene", "read_screen", "ocr_screen",
+            "draft_whatsapp_message"
         )
         for (tool in destructiveTools) {
             val level = guard.classify(tool)

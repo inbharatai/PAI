@@ -24,6 +24,7 @@ import com.unoone.agent.core.agent.SafetyVerdict
 import com.unoone.agent.core.model.ToolParamType
 import com.unoone.agent.core.util.Logger
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -141,7 +142,7 @@ class GemmaPlanner {
     suspend fun resetPlanningConversation(
         candidateTools: List<ToolSchema> = emptyList(),
         profile: ModelProfile? = null
-    ): Result<Unit> {
+    ): Result<Unit> = inferenceMutex.withLock {
         val eng = engine ?: return Result.Error("Gemma model not loaded")
         val spec = loadedSpec ?: return Result.Error("No model spec loaded")
         return try {
@@ -196,7 +197,7 @@ class GemmaPlanner {
         // Also prevents simultaneous inference and model replacement.
         loadMutex.withLock {
             if (isLoaded) {
-                close()
+                closeInternal()
             }
             lastLoadError = ""
             try {
@@ -278,7 +279,8 @@ class GemmaPlanner {
             } catch (e: Exception) {
                 Logger.e("GemmaPlanner: failed to load ${spec.displayName}", e)
                 // Full cleanup on any partial failure — never leave isLoaded true with no engine.
-                runCatching { close() }
+                // closeInternal() because we're already inside loadMutex.withLock.
+                runCatching { closeInternal() }
                 isLoaded = false
                 activeBackend = ""
                 loadedSpec = null
@@ -347,7 +349,11 @@ class GemmaPlanner {
      * — never executed). Returns null never: a no-tool answer becomes a `speak_response` ToolCall.
      */
     suspend fun plan(command: String, context: ContextSnapshot): Result<ToolCall> {
-        val conv = conversation ?: return Result.Error("Gemma model not loaded")
+        // Capture the conversation reference inside the mutex to prevent a race with
+        // resetPlanningConversation or close() swapping/closing the conversation between
+        // the null check and the inference call.
+        val conv: Conversation? = inferenceMutex.withLock { conversation }
+        if (conv == null) return Result.Error("Gemma model not loaded")
 
         return try {
             Logger.d("GemmaPlanner: planning for: $command")
@@ -367,7 +373,9 @@ class GemmaPlanner {
                 }
             } catch (e: TimeoutCancellationException) {
                 Logger.w("GemmaPlanner: inference timed out after ${INFERENCE_TIMEOUT_MS}ms; closing brain")
-                runCatching { close() }
+                // closeInternal() — we're inside inferenceMutex; acquiring loadMutex could deadlock
+                // with a concurrent load() that holds loadMutex and waits for inferenceMutex.
+                runCatching { closeInternal() }
                 return Result.Error("Gemma inference timed out")
             }
 
@@ -433,7 +441,7 @@ class GemmaPlanner {
                 }
             } catch (e: TimeoutCancellationException) {
                 Logger.w("GemmaPlanner: streaming inference timed out after ${INFERENCE_TIMEOUT_MS}ms; closing brain")
-                runCatching { close() }
+                runCatching { closeInternal() }
                 return Result.Error("Gemma inference timed out")
             }
 
@@ -480,7 +488,7 @@ class GemmaPlanner {
                 }
             } catch (e: TimeoutCancellationException) {
                 Logger.w("GemmaPlanner: vision inference timed out after ${INFERENCE_TIMEOUT_MS}ms; closing brain")
-                runCatching { close() }
+                runCatching { closeInternal() }
                 return Result.Error("Gemma vision timed out")
             }
             val text = extractText(responseMessage) ?: ""
@@ -522,7 +530,7 @@ class GemmaPlanner {
                 }
             } catch (e: TimeoutCancellationException) {
                 Logger.w("GemmaPlanner: planNext timed out after ${INFERENCE_TIMEOUT_MS}ms; closing brain")
-                runCatching { close() }
+                runCatching { closeInternal() }
                 return Result.Error("Gemma inference timed out")
             }
             extractValidatedToolCall(responseMessage)
@@ -561,7 +569,7 @@ class GemmaPlanner {
                 }
             } catch (e: TimeoutCancellationException) {
                 Logger.w("GemmaPlanner: judgeSafety timed out after ${INFERENCE_TIMEOUT_MS}ms; closing brain")
-                runCatching { close() }
+                runCatching { closeInternal() }
                 return Result.Error("Gemma judge timed out")
             }
             val text = extractText(responseMessage) ?: ""
@@ -597,7 +605,7 @@ class GemmaPlanner {
                 }
             } catch (e: TimeoutCancellationException) {
                 Logger.w("GemmaPlanner: chat timed out after ${INFERENCE_TIMEOUT_MS}ms; closing brain")
-                runCatching { close() }
+                runCatching { closeInternal() }
                 return Result.Error("Gemma chat timed out")
             }
             val text = extractText(responseMessage) ?: ""
@@ -706,8 +714,23 @@ class GemmaPlanner {
 
     /**
      * Releases the model and conversation. Safe to call multiple times. Clears [loadedSpec].
+     *
+     * Must acquire [loadMutex] to prevent a race with [load] or [resetPlanningConversation].
+     * External callers (ViewModel cleanup, onDestroy) should use [closeAsync] or call this from
+     * a coroutine scope that already holds the appropriate lock.
      */
-    fun close() {
+    suspend fun close() = loadMutex.withLock { closeInternal() }
+
+    /**
+     * Synchronous close for callers that cannot use suspend functions.
+     * Uses [kotlinx.coroutines.runBlocking] to acquire [loadMutex]. Prefer [close] in coroutine contexts.
+     */
+    fun closeSync() = runBlocking { close() }
+
+    /**
+     * Internal close logic. Must only be called while holding [loadMutex].
+     */
+    private fun closeInternal() {
         try {
             conversation?.close()
         } catch (e: Exception) {

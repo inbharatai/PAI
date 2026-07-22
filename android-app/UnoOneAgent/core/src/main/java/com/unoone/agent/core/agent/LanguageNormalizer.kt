@@ -159,8 +159,11 @@ object LanguageNormalizer {
     private fun cleanTranscript(text: String): String {
         var cleaned = text.trim()
 
-        // Remove trailing partial word (ends without a letter, e.g. "send whats-")
-        cleaned = cleaned.replace(Regex("\\s+\\S*[^a-zA-Z0-9]$"), "")
+        // Remove trailing partial word (cut off by ASR, ending with hyphen or slash).
+        // Only strips words ending with "-" or "/" — these are ASR truncation markers,
+        // not valid word endings in any supported language. Indic-script words are preserved
+        // because they end with their own script characters, not hyphens or slashes.
+        cleaned = cleaned.replace(Regex("\\s+\\S*[-/]$"), "")
 
         // Strip filler words
         for (filler in FILLER_WORDS) {
@@ -173,7 +176,11 @@ object LanguageNormalizer {
         // Strip leading noise characters
         cleaned = cleaned.replace(Regex("^[^a-zA-Z0-9\\u0900-\\u097F\\u0980-\\u09FF]+"), "")
 
-        return cleaned.ifBlank { text.trim() }
+        // If cleaning removed everything (pure filler utterance like "um uh hmm"), return empty
+        // so the orchestrator triggers a clarification prompt instead of passing garbage to the model.
+        // However, if cleaning removed legitimate text due to aggressive regex, fall back to the
+        // original trimmed input as a safety net.
+        return cleaned.ifBlank { text.trim() }.ifBlank { "" }
     }
 
     /**
@@ -215,6 +222,15 @@ object LanguageNormalizer {
 
         val bestLang = langScores.maxByOrNull { it.value }
         if (bestLang != null && bestLang.value >= 1) {
+            // Tie-breaking: if multiple languages score equally, prefer the current voice language
+            // (the user's active setting) as it's the most likely intent. Otherwise, pick the first
+            // highest scorer (insertion-order stable for deterministic results).
+            val bestScore = bestLang.value
+            val tiedWinners = langScores.entries.filter { it.value == bestScore }
+            if (tiedWinners.size > 1) {
+                val voiceLanguageMatch = tiedWinners.find { it.key == currentVoiceLanguage }
+                if (voiceLanguageMatch != null) return voiceLanguageMatch.key
+            }
             return bestLang.key
         }
 

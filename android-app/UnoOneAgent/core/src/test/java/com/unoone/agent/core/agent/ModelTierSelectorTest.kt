@@ -220,16 +220,27 @@ class ModelTierSelectorTest {
         assertEquals(10_240, ModelTierSelector.E4B_MIN_RAM_MB)
     }
 
-    // ── Default RAM (unlimited) ────────────────────────────────────────
+    // ── Explicit RAM (no silent Int.MAX_VALUE default) ──────────────────
 
     @Test
-    fun compound_intent_usesMedium_withDefaultRam() {
+    fun compound_intent_usesMedium_withSufficientRam() {
         val result = ModelTierSelector.select(
             CandidateToolSelector.TaskIntent.MESSAGING,
-            e4bAvailable = true
-            // availableRamMb defaults to Int.MAX_VALUE
+            e4bAvailable = true,
+            availableRamMb = 16_384
         )
         assertEquals(ModelProfiles.MEDIUM, result)
+    }
+
+    @Test
+    fun compound_intent_returnsLite_whenRamUnknown() {
+        // availableRamMb == -1 means "unknown" — E4B must not be selected
+        val result = ModelTierSelector.select(
+            CandidateToolSelector.TaskIntent.MESSAGING,
+            e4bAvailable = true,
+            availableRamMb = -1
+        )
+        assertEquals(ModelProfiles.LITE, result)
     }
 
     // ── selectForCommand() convenience ─────────────────────────────────

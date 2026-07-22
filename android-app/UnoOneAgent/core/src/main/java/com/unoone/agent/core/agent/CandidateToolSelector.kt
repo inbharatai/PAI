@@ -151,13 +151,14 @@ object CandidateToolSelector {
         val intentTools = TOOLS_BY_INTENT[intent] ?: TOOLS_BY_INTENT[TaskIntent.UNKNOWN]!!
 
         // speak_response is always included regardless of cap — it's the model's escape hatch.
-        // Take intent tools up to (maxCandidateTools - 1) to leave room for speak_response.
-        val cappedIntent = intentTools
-            .filterNot { it == "speak_response" }
-            .take(profile.maxCandidateTools - 1)
+        // Reserve exactly one slot for speak_response; take intent tools up to (maxCandidateTools - 1).
+        // Guard against zero/negative profiles: if maxCandidateTools <= 1, only speak_response survives.
+        val nonSpeakTools = intentTools.filterNot { it == "speak_response" }
+        val cap = (profile.maxCandidateTools - 1).coerceAtLeast(0)
+        val cappedIntent = nonSpeakTools.take(cap)
 
         // Always include speak_response as the last tool.
-        val merged = cappedIntent + listOf("speak_response")
+        val merged = cappedIntent + ALWAYS_INCLUDED
 
         // Resolve to schemas, silently dropping unknown names
         return merged.mapNotNull { CanonicalToolRegistry.schemaFor(it) }
@@ -187,59 +188,62 @@ object CandidateToolSelector {
     fun inferIntent(command: String): TaskIntent {
         val lower = command.lowercase().trim()
 
-        // Messaging
+        // Priority-ordered intent detection. More-specific patterns are checked first
+        // to avoid misclassification of compound phrases (e.g. "search notes" → NOTES not WEB).
+
+        // Messaging (compound intent — needs model for content drafting)
         if (lower.contains("whatsapp") || lower.contains("message") || lower.contains("send message") ||
             lower.contains("draft email") || lower.contains("compose email") || lower.contains("sms")) {
             return TaskIntent.MESSAGING
         }
 
-        // Calendar
+        // Calendar (compound intent — needs model for date/time parsing)
         if (lower.contains("calendar") || lower.contains("meeting") || lower.contains("schedule") ||
             lower.contains("appointment") || lower.contains("event")) {
             return TaskIntent.CALENDAR
         }
 
-        // Notes
+        // Notes — checked before WEB so "search notes" routes to NOTES not WEB
         if (lower.contains("note") || lower.contains("memo") || lower.contains("remember") ||
             lower.contains("remind") || lower.contains("summarize")) {
             return TaskIntent.NOTES
         }
 
-        // Screen
+        // Screen understanding
         if (lower.contains("screen") || lower.contains("read screen") || lower.contains("what's on") ||
             lower.contains("describe") || lower.contains("ocr")) {
             return TaskIntent.SCREEN
         }
 
-        // Web
-        if (lower.contains("search") || lower.contains("browse") || lower.contains("website") ||
-            lower.contains("url") || lower.contains("internet")) {
+        // Web — "search" without "note" context
+        if ((lower.contains("search") && !lower.contains("note")) || lower.contains("browse") ||
+            lower.contains("website") || lower.contains("url") || lower.contains("internet")) {
             return TaskIntent.WEB
         }
 
-        // Accessibility
+        // Accessibility (deterministic — rarely needs model)
         if (lower.contains("scroll") || lower.contains("click") || lower.contains("go home") ||
             lower.contains("go back") || lower.contains("navigate") || lower.contains("type in")) {
             return TaskIntent.ACCESSIBILITY
         }
 
-        // Phone
+        // Phone (deterministic)
         if (lower.contains("call") || lower.contains("dial") || lower.contains("phone")) {
             return TaskIntent.PHONE
         }
 
-        // Document
+        // Document (compound — form filling needs model)
         if (lower.contains("document") || lower.contains("form") || lower.contains("fill") ||
             lower.contains("pdf")) {
             return TaskIntent.DOCUMENT
         }
 
-        // Camera
+        // Camera (deterministic)
         if (lower.contains("camera") || lower.contains("photo") || lower.contains("detect")) {
             return TaskIntent.CAMERA
         }
 
-        // Skill
+        // Skill (compound — needs model for step parsing)
         if (lower.contains("skill") || lower.contains("teach") || lower.contains("automation")) {
             return TaskIntent.SKILL
         }

@@ -89,7 +89,7 @@ object DeterministicIntentRouter {
     )
 
     private fun isWakeCommand(lower: String): Boolean =
-        WAKE_PHRASES.any { lower == it || lower.startsWith("$it ") }
+        WAKE_PHRASES.any { lower == it || lower.startsWith("$it ") && !lower.contains(" and ") && !lower.contains(" message ") }
 
     // ── Language commands ────────────────────────────────────────────────
 
@@ -107,12 +107,24 @@ object DeterministicIntentRouter {
         "speak in malayalam" to "ml"
     )
 
+    /** Localized acknowledgment messages for language switches. */
+    private val LANGUAGE_ACKNOWLEDGMENTS = mapOf(
+        "en" to "Switched to English.",
+        "hi" to "हिंदी में बोलना शुरू करता हूं।",
+        "ta" to "தமிழில் பேசுகிறேன்.",
+        "bn" to "বাংলায় বলছি.",
+        "te" to "తెలుగులో మాట్లాడుతున్నాను.",
+        "kn" to "ಕನ್ನಡದಲ್ಲಿ ಮಾತನಾಡುತ್ತೇನೆ.",
+        "ml" to "മലയാളത്തിൽ സംസാരിക്കുന്നു."
+    )
+
     private fun routeLanguageCommand(lower: String): DeterministicResult? {
         for ((phrase, lang) in LANGUAGE_COMMANDS) {
             if (lower.contains(phrase)) {
+                val acknowledgment = LANGUAGE_ACKNOWLEDGMENTS[lang] ?: "Language switched to $lang."
                 return DeterministicResult.Matched(
                     call = ToolCall("speak_response", JsonObject(mapOf(
-                        "text" to JsonPrimitive("Language switched to $lang")
+                        "text" to JsonPrimitive(acknowledgment)
                     ))),
                     intent = "LANGUAGE_SWITCH"
                 )
@@ -123,17 +135,24 @@ object DeterministicIntentRouter {
 
     // ── Blind mode commands ──────────────────────────────────────────────
 
+    /** Negation words that should prevent blind mode activation/deactivation. */
+    private val NEGATION_WORDS = setOf("don't", "dont", "don't", "do not", "never", "not", "no")
+
     private fun routeBlindModeCommand(lower: String): DeterministicResult? {
+        // Check for negation before matching blind mode commands.
+        // "don't start blind mode" should NOT activate; "never stop blind mode" should NOT deactivate.
+        val hasNegation = NEGATION_WORDS.any { lower.contains(it) }
+
         return when {
-            lower.contains("start blind") || lower.contains("blind mode on") ||
-                lower.contains("andha mode shuru") -> DeterministicResult.Matched(
+            !hasNegation && (lower.contains("start blind") || lower.contains("blind mode on") ||
+                lower.contains("andha mode shuru")) -> DeterministicResult.Matched(
                 ToolCall("speak_response", JsonObject(mapOf(
                     "text" to JsonPrimitive("Blind aid mode activated")
                 ))),
                 intent = "BLIND_MODE_ON"
             )
-            lower.contains("stop blind") || lower.contains("blind mode off") ||
-                lower.contains("andha mode band") -> DeterministicResult.Matched(
+            !hasNegation && (lower.contains("stop blind") || lower.contains("blind mode off") ||
+                lower.contains("andha mode band")) -> DeterministicResult.Matched(
                 ToolCall("speak_response", JsonObject(mapOf(
                     "text" to JsonPrimitive("Blind aid mode deactivated")
                 ))),
@@ -163,8 +182,14 @@ object DeterministicIntentRouter {
     private fun routeAppLaunch(lower: String): DeterministicResult? {
         // Only match simple, single-intent app launches.
         // Compound commands ("open whatsapp and send message") should fall through to the model.
+        // Also block patterns like "open whatsapp message to rahul" where a messaging intent
+        // follows the app name without "and" as a connector.
+        val compoundIndicators = listOf(" and ", " send ", " message ", " text ", " draft ",
+            " compose ", " write ", " call ", " email ", " note ", " remind ", " schedule ",
+            " add ", " create ", " fill ")
         for ((phrase, _) in APP_LAUNCHES) {
-            if (lower == phrase || lower == "$phrase app" || lower.startsWith("$phrase ") && !lower.contains(" and ") && !lower.contains(" send ") && !lower.contains(" message ")) {
+            if (lower == phrase || lower == "$phrase app" ||
+                (lower.startsWith("$phrase ") && compoundIndicators.none { lower.contains(it) })) {
                 val packageName = APP_LAUNCHES[phrase]!!
                 return DeterministicResult.Matched(
                     ToolCall("open_app", JsonObject(mapOf("package_name" to JsonPrimitive(packageName)))),
@@ -207,14 +232,15 @@ object DeterministicIntentRouter {
 
     // ── Voice fast replies ──────────────────────────────────────────────
 
+    // "yes" and "no" are intentionally excluded from fast replies because they are
+    // context-dependent (confirmation/denial in multi-step flows) and must reach the
+    // model pipeline for proper interpretation.
     private val FAST_REPLIES = mapOf(
         "thank you" to "You're welcome!",
         "thanks" to "You're welcome!",
         "stop" to "Okay, stopping.",
         "cancel" to "Cancelled.",
         "never mind" to "Okay, no problem.",
-        "yes" to "Okay.",
-        "no" to "Okay.",
         "ok" to "Okay."
     )
 

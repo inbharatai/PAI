@@ -82,7 +82,7 @@ object RuleBasedParser {
                     "create_skill",
                     JsonObject(mapOf(
                         "name" to JsonPrimitive(name),
-                        "steps" to JsonPrimitive(steps.joinToString("|"))
+                        "steps" to kotlinx.serialization.json.JsonArray(steps.map { JsonPrimitive(it) })
                     ))
                 )
             }
@@ -347,10 +347,12 @@ object RuleBasedParser {
                 ToolCall("system_control", JsonObject(mapOf("action" to JsonPrimitive("swipe"), "target" to JsonPrimitive("right"))))
             }
             lowered.contains("swipe up") -> {
-                ToolCall("system_control", JsonObject(mapOf("action" to JsonPrimitive("swipe"), "target" to JsonPrimitive("up"))))
+                // Use the atomic scroll tool for vertical swipes (prefer over system_control)
+                ToolCall("scroll", JsonObject(mapOf("direction" to JsonPrimitive("up"))))
             }
             lowered.contains("swipe down") -> {
-                ToolCall("system_control", JsonObject(mapOf("action" to JsonPrimitive("swipe"), "target" to JsonPrimitive("down"))))
+                // Use the atomic scroll tool for vertical swipes (prefer over system_control)
+                ToolCall("scroll", JsonObject(mapOf("direction" to JsonPrimitive("down"))))
             }
             // Long press on a text element — extract the target text, not coordinates
             lowered.contains("long press") || lowered.contains("long tap") -> {

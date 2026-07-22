@@ -30,7 +30,11 @@ object ActionVerifier {
         actualForeground: String?
     ): ActionResult {
         val foreground = actualForeground ?: ""
-        val verified = expectedPackages.any { foreground.startsWith(it) }
+        // Exact package match or sub-package match (com.whatsapp matches com.whatsapp.w4b
+        // but NOT com.whatsappspyware). Simple prefix matching would allow com.whatsapp.spyware.
+        val verified = expectedPackages.any { expected ->
+            foreground == expected || foreground.startsWith("$expected.")
+        }
 
         return if (verified) {
             ActionResult.success(
@@ -79,45 +83,15 @@ object ActionVerifier {
 
     /**
      * Build an observation string from an [ActionResult] for the model's next ReAct step.
-     *
-     * The observation includes the tool name, status, user-facing message, and key evidence.
-     * It is truncated to [MAX_OBSERVATION_LENGTH] characters to fit the model's context window.
+     * Delegates to [ObservationBuilder.buildDetailed] to maintain a single source of truth.
      */
-    fun buildObservation(result: ActionResult): String {
-        val base = buildString {
-            append("Tool: ${result.tool}\n")
-            append("Status: ${result.status.name}\n")
-            append("Verified: ${result.verified}\n")
-            if (result.evidence.isNotEmpty()) {
-                append("Evidence:\n")
-                for ((key, value) in result.evidence) {
-                    append("  $key: $value\n")
-                }
-            }
-            append("Message: ${result.userMessage}\n")
-            if (result.recoverableError != null) {
-                append("Recoverable: ${result.recoverableError}\n")
-            }
-        }
-        return base.take(MAX_OBSERVATION_LENGTH)
-    }
+    fun buildObservation(result: ActionResult): String = ObservationBuilder.buildDetailed(result)
 
     /**
-     * Build a concise observation for the model when an action succeeded with verification.
-     * Only the essential info — no full evidence dump.
+     * Build a concise observation from an [ActionResult].
+     * Delegates to [ObservationBuilder.buildConcise] to maintain a single source of truth.
      */
-    fun buildConciseObservation(result: ActionResult): String {
-        return when {
-            result.isVerifiedSuccess -> "✓ ${result.tool}: ${result.userMessage}"
-            result.status == ActionResult.Status.PARTIAL ->
-                "⚠ ${result.tool}: ${result.userMessage} (partial)"
-            result.status == ActionResult.Status.FAILED ->
-                "✗ ${result.tool}: ${result.userMessage}" +
-                    (result.recoverableError?.let { " [recoverable: $it]" } ?: "")
-            !result.verified -> "? ${result.tool}: ${result.userMessage} (unverified)"
-            else -> "→ ${result.tool}: ${result.userMessage}"
-        }
-    }
+    fun buildConciseObservation(result: ActionResult): String = ObservationBuilder.buildConcise(result)
 
     /**
      * Map of tools that require foreground package verification after execution.

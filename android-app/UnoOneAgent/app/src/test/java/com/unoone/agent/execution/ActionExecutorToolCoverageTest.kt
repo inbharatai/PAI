@@ -74,6 +74,8 @@ class ActionExecutorToolCoverageTest {
     @Test
     fun deactivateBlindAidIsHandledAndReturnsSuccess() {
         // Regression for the prior `deactivate_blind_id` typo: the correct tool name must resolve.
+        // Wire the Blind Aid callback so the branch returns Success instead of Error.
+        executor._setBlindAidActive = { _ -> }
         val result = runBlocking { executor.executeTool(ToolCall("deactivate_blind_aid", JsonObject(emptyMap()))) }
         assertTrue("deactivate_blind_aid must be a handled branch", result is Result.Success)
         assertEquals("Blind Aid deactivated.", (result as Result.Success).data)

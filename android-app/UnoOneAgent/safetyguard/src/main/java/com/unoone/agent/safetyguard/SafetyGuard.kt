@@ -34,14 +34,11 @@ class SafetyGuard {
         "create_calendar_event" to RiskLevel.CONFIRM,
         "open_dialer" to RiskLevel.CONFIRM,
         "share_text" to RiskLevel.CONFIRM,
-        "read_screen" to RiskLevel.CONFIRM,
-        "ocr_screen" to RiskLevel.CONFIRM,
+        "read_screen" to RiskLevel.STRONG_CONFIRM,
+        "ocr_screen" to RiskLevel.STRONG_CONFIRM,
         "open_camera" to RiskLevel.CONFIRM,
         "create_skill" to RiskLevel.CONFIRM,
-        "long_press" to RiskLevel.CONFIRM,
-        "click" to RiskLevel.CONFIRM,
         "click_accessibility_node" to RiskLevel.CONFIRM,
-        "type" to RiskLevel.CONFIRM,
         "type_into_accessibility_node" to RiskLevel.CONFIRM,
         "long_press_accessibility_node" to RiskLevel.CONFIRM,
         // Mic capture + online lookup both touch privacy-sensitive surfaces → single confirmation.
@@ -53,7 +50,7 @@ class SafetyGuard {
         // opening the automated browser session.
         "secure_browser_task" to RiskLevel.CONFIRM,
         // WhatsApp draft — user reviews before send
-        "draft_whatsapp_message" to RiskLevel.CONFIRM,
+        "draft_whatsapp_message" to RiskLevel.STRONG_CONFIRM,
 
         // Risk 2 — Strong confirmation (must type "confirm")
         "delete_notes" to RiskLevel.STRONG_CONFIRM,
@@ -63,9 +60,8 @@ class SafetyGuard {
         "draft_email" to RiskLevel.STRONG_CONFIRM,
         "send_whatsapp" to RiskLevel.STRONG_CONFIRM,
         "send_prepared_whatsapp" to RiskLevel.STRONG_CONFIRM,
+        // system_control actions are all classified as STRONG_CONFIRM at the tool level. Atomic tools have their own entries above.
         "system_control" to RiskLevel.STRONG_CONFIRM,
-        "find_and_click" to RiskLevel.STRONG_CONFIRM,
-        "fill" to RiskLevel.STRONG_CONFIRM,
         // Captures + analyzes the whole screen, which can read sensitive content (passwords, OTP,
         // banking) → strong confirmation, never silent.
         "describe_scene" to RiskLevel.STRONG_CONFIRM,

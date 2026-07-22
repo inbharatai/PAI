@@ -19,7 +19,12 @@ import com.unoone.agent.core.model.ModelProfiles
  */
 object ModelTierSelector {
 
-    /** Minimum available RAM (MB) to attempt E4B loading. Below this, force Lite. */
+    /**
+     * Minimum available RAM (MB) to attempt E4B loading. Below this, force Lite.
+     * Aligned with [BrainModelRegistry.GEMMA_4_E4B.minimumRamMb] (8,192 MB) plus
+     * a 2 GB headroom buffer for the OS and other app processes. Devices with exactly
+     * 8 GB total RAM rarely have 8 GB *available* after OS overhead.
+     */
     const val E4B_MIN_RAM_MB: Int = 10_240
 
     /**
@@ -35,7 +40,7 @@ object ModelTierSelector {
     fun select(
         intent: CandidateToolSelector.TaskIntent,
         e4bAvailable: Boolean,
-        availableRamMb: Int = Int.MAX_VALUE
+        availableRamMb: Int
     ): ModelProfile {
         // CHAT never needs a model switch — use whatever is loaded (Lite by default)
         if (intent == CandidateToolSelector.TaskIntent.CHAT) {
@@ -64,6 +69,8 @@ object ModelTierSelector {
             CandidateToolSelector.TaskIntent.UNKNOWN
         )
 
+        // availableRamMb == -1 means "unknown" (no ActivityManager data yet). Since -1 < E4B_MIN_RAM_MB,
+        // E4B is automatically blocked when RAM is unknown, which is the safe default.
         if (intent in compoundIntents && e4bAvailable && availableRamMb >= E4B_MIN_RAM_MB) {
             return ModelProfiles.MEDIUM
         }
@@ -79,7 +86,7 @@ object ModelTierSelector {
     fun selectForCommand(
         command: String,
         e4bAvailable: Boolean,
-        availableRamMb: Int = Int.MAX_VALUE
+        availableRamMb: Int
     ): ModelProfile {
         val intent = CandidateToolSelector.inferIntent(command)
         return select(intent, e4bAvailable, availableRamMb)

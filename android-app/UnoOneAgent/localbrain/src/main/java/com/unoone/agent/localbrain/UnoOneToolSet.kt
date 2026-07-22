@@ -46,16 +46,26 @@ class UnoOneToolSet : ToolSet {
          * @return a ToolSet that only contains the specified tools.
          */
         fun forTools(toolNames: Set<String>): ToolSet {
-            // LiteRT-LM's `tool()` function creates a tool descriptor from a ToolSet instance
-            // by scanning @Tool-annotated methods. We use a delegating ToolSet that
-            // includes all methods but the conversation config will only offer the named
-            // tools. Since we use automaticToolCalling=false, the model can only propose
-            // tools from the registered set.
+            // IMPORTANT: LiteRT-LM's `tool()` function creates a tool descriptor from a
+            // ToolSet instance by scanning ALL @Tool-annotated methods. Currently this
+            // returns the full UnoOneToolSet regardless of the requested tool names,
+            // which means the model sees all 42 tool signatures in its context window
+            // even when only 2-6 candidate tools are relevant for the current task.
             //
-            // For now, we return the full UnoOneToolSet and rely on the system instruction
-            // + tool validation in GemmaPlanner.extractValidatedToolCall to enforce the
-            // candidate tool set. A future optimization will implement true filtering
-            // by dynamically constructing the tool list.
+            // This wastes context tokens (especially costly for E2B with its 2048-token
+            // context) and can confuse the model about which tools it can call. The
+            // candidate set is enforced by:
+            // 1. The system instruction listing only the candidate tools
+            // 2. ToolProposalValidator rejecting tools outside the candidate set
+            //
+            // TODO: Implement true dynamic filtering by constructing a ToolSet that only
+            // exposes @Tool methods matching the requested tool names. This requires either:
+            // (a) reflection-based proxy that only invokes methods in toolNames, or
+            // (b) registering only the candidate tools in ConversationConfig.tools.
+            com.unoone.agent.core.util.Logger.w(
+                "UnoOneToolSet: forTools requested ${toolNames.size} tools but full ToolSet returned. " +
+                "Context window includes all 42 tool signatures. Implement dynamic filtering."
+            )
             return UnoOneToolSet()
         }
     }

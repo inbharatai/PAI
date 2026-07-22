@@ -286,7 +286,7 @@ class ActionExecutor(
                         verifyForegroundLaunch(
                             phoneControl.sendWhatsAppMessage(number, msg),
                             actionLabel = "WhatsApp",
-                            successMessage = "WhatsApp message sent to $contact."
+                            successMessage = "WhatsApp draft opened for $contact. Please review and press send."
                         )
                     }
                 }
@@ -338,11 +338,15 @@ class ActionExecutor(
                     }
                 }
                 "detect_objects" -> {
-                    _setBlindAidActive?.invoke(true)
+                    val activator = _setBlindAidActive
+                        ?: return Result.Error("Blind Aid is not available right now.")
+                    activator(true)
                     Result.Success("Blind Aid activated.")
                 }
                 "deactivate_blind_aid" -> {
-                    _setBlindAidActive?.invoke(false)
+                    val deactivator = _setBlindAidActive
+                        ?: return Result.Error("Blind Aid is not available right now.")
+                    deactivator(false)
                     Result.Success("Blind Aid deactivated.")
                 }
                 "voice_recording" -> {

@@ -36,7 +36,7 @@ data class ModelLoadResult(
      * Available device RAM in MB at the time of load, as reported by ActivityManager.MemoryInfo.
      * Used by [ModelTierSelector] to decide whether E4B is viable.
      */
-    val availableRamMb: Int = 0,
+    val availableRamMb: Int = -1,
 
     /**
      * The profile that was used for this load attempt. Null if the load failed before
@@ -72,7 +72,7 @@ data class ModelLoadResult(
         fun failed(
             modelId: BrainModelId,
             errorMessage: String,
-            availableRamMb: Int = 0
+            availableRamMb: Int = -1
         ): ModelLoadResult = ModelLoadResult(
             modelId = modelId,
             backend = "",

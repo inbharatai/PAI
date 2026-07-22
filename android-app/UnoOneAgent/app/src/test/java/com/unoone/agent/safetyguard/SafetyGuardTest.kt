@@ -18,7 +18,8 @@ class SafetyGuardTest {
         val directTools = listOf(
             "create_note", "search_notes", "summarize_text", "speak_response",
             "open_chrome", "open_app", "deactivate_blind_aid", "check_calendar", "open_calendar",
-            "prepare_document_fill"
+            "prepare_document_fill", "go_home", "go_back", "scroll",
+            "open_notifications", "open_recents", "resolve_contact", "check_calendar_conflict"
         )
         for (tool in directTools) {
             assertEquals("$tool should be DIRECT", RiskLevel.DIRECT, guard.classify(tool))
@@ -28,8 +29,11 @@ class SafetyGuardTest {
     @Test
     fun confirmToolsClassifiedCorrectly() {
         val confirmTools = listOf(
-            "open_url", "open_calendar_insert", "open_dialer", "share_text",
-            "read_screen", "ocr_screen", "open_camera", "create_skill"
+            "open_url", "open_calendar_insert", "create_calendar_event", "open_dialer",
+            "share_text", "open_camera", "create_skill",
+            "click_accessibility_node", "type_into_accessibility_node",
+            "long_press_accessibility_node", "voice_recording", "web_search",
+            "secure_browser_task"
         )
         for (tool in confirmTools) {
             assertEquals("$tool should be CONFIRM", RiskLevel.CONFIRM, guard.classify(tool))
@@ -40,7 +44,8 @@ class SafetyGuardTest {
     fun strongConfirmToolsClassifiedCorrectly() {
         val strongConfirmTools = listOf(
             "delete_notes", "delete_all_notes", "export_data", "detect_objects",
-            "draft_email", "send_whatsapp", "system_control", "find_and_click", "fill"
+            "draft_email", "send_whatsapp", "send_prepared_whatsapp", "system_control",
+            "describe_scene", "read_screen", "ocr_screen", "draft_whatsapp_message"
         )
         for (tool in strongConfirmTools) {
             assertEquals("$tool should be STRONG_CONFIRM", RiskLevel.STRONG_CONFIRM, guard.classify(tool))
