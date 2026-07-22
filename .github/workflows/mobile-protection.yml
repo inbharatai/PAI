@@ -1,0 +1,111 @@
+name: Mobile Protection
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+concurrency:
+  group: mobile-protection-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify-mobile-untouched:
+    name: Verify Mobile Golden Baseline Untouched
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify golden tag exists
+        run: |
+          if ! git tag -l mobile-golden-baseline-v1 | grep -q mobile-golden-baseline-v1; then
+            echo "FAIL: Golden tag 'mobile-golden-baseline-v1' not found"
+            echo "This tag must exist to protect the mobile baseline."
+            exit 1
+          fi
+          echo "PASS: Golden tag found"
+
+      - name: Verify tag points to correct commit
+        run: |
+          EXPECTED_COMMIT="ae35ec7"
+          ACTUAL_COMMIT=$(git rev-parse --short mobile-golden-baseline-v1)
+          if [[ ! "$ACTUAL_COMMIT" == *"$EXPECTED_COMMIT"* ]]; then
+            echo "FAIL: Golden tag points to $ACTUAL_COMMIT, expected $EXPECTED_COMMIT"
+            echo "The mobile golden baseline tag may have been moved."
+            exit 1
+          fi
+          echo "PASS: Golden tag points to correct commit ($ACTUAL_COMMIT)"
+
+      - name: Check no files changed in protected path
+        run: |
+          DIFF=$(git diff mobile-golden-baseline-v1 HEAD -- android-app/UnoOneAgent/ || true)
+          if [ -n "$DIFF" ]; then
+            echo "FAIL: Changes detected in protected path 'android-app/UnoOneAgent/'"
+            echo ""
+            echo "Changed files:"
+            git diff --name-only mobile-golden-baseline-v1 HEAD -- android-app/UnoOneAgent/
+            echo ""
+            echo "The Android application must not be modified during desktop development."
+            exit 1
+          fi
+          echo "PASS: No changes in protected Android path"
+
+      - name: Check no files added or removed
+        run: |
+          CURRENT=$(git ls-tree -r --name-only HEAD -- android-app/UnoOneAgent/ | wc -l)
+          BASELINE=$(git ls-tree -r --name-only mobile-golden-baseline-v1 -- android-app/UnoOneAgent/ | wc -l)
+
+          if [ "$CURRENT" -ne "$BASELINE" ]; then
+            echo "FAIL: Protected file count changed"
+            echo "  Baseline: $BASELINE files"
+            echo "  Current:  $CURRENT files"
+
+            # Find added files
+            ADDED=$(comm -23 <(git ls-tree -r --name-only HEAD -- android-app/UnoOneAgent/ | sort) <(git ls-tree -r --name-only mobile-golden-baseline-v1 -- android-app/UnoOneAgent/ | sort))
+            REMOVED=$(comm -13 <(git ls-tree -r --name-only HEAD -- android-app/UnoOneAgent/ | sort) <(git ls-tree -r --name-only mobile-golden-baseline-v1 -- android-app/UnoOneAgent/ | sort))
+
+            if [ -n "$ADDED" ]; then
+              echo "Added files:"
+              echo "$ADDED"
+            fi
+            if [ -n "$REMOVED" ]; then
+              echo "Removed files:"
+              echo "$REMOVED"
+            fi
+            exit 1
+          fi
+          echo "PASS: File count matches baseline ($BASELINE files)"
+
+      - name: Verify hash manifest is complete
+        run: |
+          if [ ! -f scripts/MOBILE_GOLDEN_HASHES.txt ]; then
+            echo "FAIL: Hash manifest not found at scripts/MOBILE_GOLDEN_HASHES.txt"
+            exit 1
+          fi
+
+          # Count non-comment, non-empty lines
+          HASH_COUNT=$(grep -c '^[0-9a-f]\{64\}  ' scripts/MOBILE_GOLDEN_HASHES.txt || echo 0)
+
+          if [ "$HASH_COUNT" -lt 100 ]; then
+            echo "FAIL: Hash manifest appears incomplete (only $HASH_COUNT entries, expected 315)"
+            echo "The manifest must contain one SHA-256 hash per protected file."
+            exit 1
+          fi
+
+          echo "PASS: Hash manifest contains $HASH_COUNT entries"
+
+      - name: Mobile protection result
+        if: always()
+        run: |
+          echo "============================================"
+          echo "Mobile Golden Baseline Protection Check"
+          echo "============================================"
+          echo "Protected path: android-app/UnoOneAgent/"
+          echo "Golden tag: mobile-golden-baseline-v1"
+          echo "Golden commit: ae35ec7"
+          echo "Protected files: 315"
+          echo "============================================"

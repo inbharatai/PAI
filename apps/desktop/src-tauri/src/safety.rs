@@ -272,10 +272,12 @@ impl DesktopSafetyGuard {
         });
     }
 
+    #[allow(dead_code)]
     pub fn get_security_level(&self) -> &SecurityLevel {
         &self.security_level
     }
 
+    #[allow(dead_code)]
     pub fn get_audit_log(&self) -> &[SafetyAuditEntry] {
         &self.audit_log
     }

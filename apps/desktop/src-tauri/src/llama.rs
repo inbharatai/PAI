@@ -61,6 +61,7 @@ pub enum ModelStatus {
 
 /// Inference request
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct InferenceRequest {
     pub prompt: String,
     pub system_prompt: Option<String>,
@@ -72,6 +73,7 @@ pub struct InferenceRequest {
 
 /// Conversation turn
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct ConversationTurn {
     pub role: String,  // "user" or "assistant"
     pub content: String,
@@ -79,6 +81,7 @@ pub struct ConversationTurn {
 
 /// Inference response
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct InferenceResponse {
     pub text: String,
     pub tokens_generated: u32,
@@ -99,6 +102,7 @@ pub struct ModelInfo {
 }
 
 /// Model manager state
+#[allow(dead_code)]
 pub struct ModelManager {
     config: Mutex<Option<ModelConfig>>,
     status: Mutex<ModelStatus>,
@@ -140,6 +144,7 @@ impl ModelManager {
         backends
     }
 
+    #[allow(dead_code)]
     fn check_cuda(&self) -> bool {
         // Check for CUDA by trying to find nvcuda.dll (Windows) or libcuda.so (Linux)
         if cfg!(target_os = "windows") {
@@ -153,11 +158,13 @@ impl ModelManager {
         }
     }
 
+    #[allow(dead_code)]
     fn check_metal(&self) -> bool {
         // Metal is always available on macOS
         cfg!(target_os = "macos")
     }
 
+    #[allow(dead_code)]
     fn check_vulkan(&self) -> bool {
         // Check for Vulkan runtime
         if cfg!(target_os = "windows") {
@@ -333,6 +340,7 @@ impl ModelManager {
     /// Get the llama.cpp binary path for the current platform
     /// Uses manifest-informed directory structure (uppercase CUDA/CPU/VULKAN)
     /// Prefers CUDA > Vulkan > CPU based on detected hardware
+    #[allow(dead_code)]
     fn get_llama_binary_path(&self, vault_root: &str) -> PathBuf {
         let base_dir = if cfg!(target_os = "windows") {
             PathBuf::from(vault_root).join("RUNTIMES").join("WINDOWS")
@@ -387,6 +395,7 @@ impl ModelManager {
     }
 
     /// Start llama-server for inference
+    #[allow(dead_code)]
     pub fn start_server(&self, config: &ModelConfig, vault_root: &str) -> Result<u16, String> {
         let llama_path = self.get_llama_binary_path(vault_root);
 
@@ -449,17 +458,18 @@ impl ModelManager {
             }
         }
 
-        // Start the process
+        // Start the process — DO NOT mark as Loaded until health check passes
         let child = cmd.spawn()
             .map_err(|e| format!("Failed to start llama-server: {}", e))?;
 
         *self.llama_process.lock().unwrap() = Some(child);
-        *self.status.lock().unwrap() = ModelStatus::Loaded;
+        *self.status.lock().unwrap() = ModelStatus::Loading;
 
         Ok(port)
     }
 
     /// Stop the llama-server process
+    #[allow(dead_code)]
     pub fn stop_server(&self) -> Result<(), String> {
         let mut process = self.llama_process.lock().unwrap();
         if let Some(ref mut child) = *process {
@@ -472,16 +482,19 @@ impl ModelManager {
     }
 
     /// Get current model status
+    #[allow(dead_code)]
     pub fn get_status(&self) -> ModelStatus {
         self.status.lock().unwrap().clone()
     }
 
     /// Get current backend
+    #[allow(dead_code)]
     pub fn get_backend(&self) -> AccelerationBackend {
         self.backend.lock().unwrap().clone()
     }
 
     /// Set backend
+    #[allow(dead_code)]
     pub fn set_backend(&self, backend: AccelerationBackend) {
         *self.backend.lock().unwrap() = backend;
     }
@@ -508,8 +521,20 @@ pub fn get_model_config() -> ModelConfig {
 
 #[tauri::command]
 pub fn get_model_status() -> String {
-    // Check if llama-server is running AND serving a model
-    // Step 1: Check TCP connectivity
+    // SECURITY: A TCP port check alone does NOT prove a model is loaded.
+    // Any process on port 8342 would pass this check. The correct verification
+    // requires: (1) confirming the PID matches our managed child process,
+    // (2) calling the /health endpoint, (3) verifying the loaded model identity.
+    //
+    // Until a proper HTTP client (e.g., reqwest) is added to Cargo.toml,
+    // we report STARTING if we have a managed process, but we do NOT
+    // claim LOADED without a health check.
+
+    // Step 1: Check if we have a managed child process
+    // This is tracked by ModelManager, but since this is a free function
+    // we can only check TCP connectivity. We deliberately return a
+    // conservative status rather than claiming LOADED.
+
     if std::net::TcpStream::connect_timeout(
         &"127.0.0.1:8342".parse().unwrap(),
         std::time::Duration::from_secs(2),
@@ -517,9 +542,18 @@ pub fn get_model_status() -> String {
         return "NOT_LOADED".to_string();
     }
 
-    // Step 2: Verify it's actually llama-server by hitting the health endpoint
-    // We make a simple HTTP GET request to /health
-    // If we can't verify, we report LOADED but note the limitation
-    // TODO: Replace with proper HTTP client when reqwest or similar is added
-    "LOADED".to_string()
+    // TCP port is open — but we have NOT verified:
+    // - That this is our llama-server process (not another process on this port)
+    // - That the model is actually loaded (not still loading)
+    // - That the model identity matches what we expect
+    // - That the model hash is correct
+    //
+    // TODO: Add reqwest to Cargo.toml and implement proper health verification:
+    //   1. GET /health → confirm status "ok"
+    //   2. Verify PID matches our managed process
+    //   3. Verify executable path is from validated USB
+    //   4. Verify loaded model hash matches manifest
+    //
+    // Until then, return PENDING_VERIFICATION to avoid false confidence.
+    "PENDING_VERIFICATION".to_string()
 }

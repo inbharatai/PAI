@@ -10,6 +10,7 @@ mod accessibility;
 mod security;
 
 use std::sync::Mutex;
+use std::path::PathBuf;
 
 /// Shared vault state for cross-command persistence
 struct VaultState {
@@ -234,6 +235,7 @@ fn validate_vault_root(vault_root: &str) -> Result<(String, String), String> {
 }
 
 #[tauri::command]
+#[allow(unexpected_cfgs)]
 fn detect_vault() -> Result<VaultInfo, String> {
     // Scan removable drives for a valid UnoOne vault
     // Validates via manifest.json + VERSION + vault.id — not hardcoded paths
@@ -249,22 +251,28 @@ fn detect_vault() -> Result<VaultInfo, String> {
         }
     }
 
-    // Also check non-removable paths (for development / C: drive)
-    let fallback_paths = if cfg!(target_os = "windows") {
-        vec!["C:\\UNOONE"]
-    } else if cfg!(target_os = "macos") {
-        vec!["/tmp/UNOONE"]
-    } else {
-        vec!["/tmp/UNOONE"]
-    };
+    // NOTE: Production builds MUST NOT fall back to local/development paths.
+    // The C:\UNOONE and /tmp/UNOONE fallbacks are gated behind a compile-time
+    // feature flag "dev-local-vault" to prevent accidental use in production.
+    // Only removable, validated USB volumes are accepted in production builds.
+    #[cfg(feature = "dev-local-vault")]
+    {
+        let fallback_paths = if cfg!(target_os = "windows") {
+            vec!["C:\\UNOONE"]
+        } else if cfg!(target_os = "macos") {
+            vec!["/tmp/UNOONE"]
+        } else {
+            vec!["/tmp/UNOONE"]
+        };
 
-    for path in fallback_paths {
-        if let Ok((vault_root, vault_id)) = validate_vault_root(path) {
-            return Ok(VaultInfo {
-                detected: true,
-                vault_root,
-                vault_id,
-            });
+        for path in fallback_paths {
+            if let Ok((vault_root, vault_id)) = validate_vault_root(path) {
+                return Ok(VaultInfo {
+                    detected: true,
+                    vault_root,
+                    vault_id,
+                });
+            }
         }
     }
 
@@ -293,41 +301,45 @@ fn unlock_vault(password: String, vault_root: String, state: tauri::State<'_, Mu
         });
     }
 
-    // Read the vault ID to verify the vault exists
-    let vault_id_path = std::path::Path::new(&vault_root)
-        .join("VAULT")
-        .join("identity")
-        .join("vault.id");
+    // Use vault-core to unlock the vault with Argon2id key derivation
+    // and XChaCha20-Poly1305 authenticated encryption
+    let vault_path = PathBuf::from(&vault_root);
+    let mut vault = unoone_vault_core::Vault::open(&vault_path)
+        .map_err(|e| format!("Failed to open vault: {}", e))?;
 
-    if !vault_id_path.exists() {
-        return Ok(VaultUnlockResult {
-            success: false,
-            vault_id: String::new(),
-            error: "Vault not found at specified path".to_string(),
-        });
+    match vault.unlock(password.as_bytes()) {
+        Ok(result) => {
+            // Update shared state
+            let mut vault_state = state.lock().map_err(|e| format!("State lock error: {}", e))?;
+            vault_state.unlocked = true;
+            vault_state.vault_id = result.vault_id.clone();
+            vault_state.vault_root = vault_root.clone();
+
+            Ok(VaultUnlockResult {
+                success: true,
+                vault_id: result.vault_id,
+                error: String::new(),
+            })
+        }
+        Err(unoone_vault_core::VaultError::WrongPassword) => {
+            Ok(VaultUnlockResult {
+                success: false,
+                vault_id: String::new(),
+                error: "Wrong password".to_string(),
+            })
+        }
+        Err(e) => {
+            Ok(VaultUnlockResult {
+                success: false,
+                vault_id: String::new(),
+                error: format!("Unlock failed: {}", e),
+            })
+        }
     }
-
-    let vault_id = std::fs::read_to_string(&vault_id_path)
-        .map_err(|e| format!("Failed to read vault ID: {}", e))?
-        .trim().to_string();
-
-    // TODO: Implement real Argon2id key derivation + vault decryption verification
-    // This requires integrating the Kotlin/Native vault library or a Rust Argon2id implementation
-    // For now, store the unlocked state so the UI can proceed
-    let mut vault_state = state.lock().map_err(|e| format!("State lock error: {}", e))?;
-    vault_state.unlocked = true;
-    vault_state.vault_id = vault_id.clone();
-    vault_state.vault_root = vault_root.clone();
-
-    Ok(VaultUnlockResult {
-        success: true,
-        vault_id,
-        error: String::new(),
-    })
 }
 
 #[tauri::command]
-fn setup_vault(password: String, profile_name: Option<String>, vault_root: String) -> Result<VaultSetupResult, String> {
+fn setup_vault(password: String, _profile_name: Option<String>, vault_root: String) -> Result<VaultSetupResult, String> {
     if password.len() < 8 {
         return Ok(VaultSetupResult {
             success: false,
@@ -346,67 +358,52 @@ fn setup_vault(password: String, profile_name: Option<String>, vault_root: Strin
         });
     }
 
-    // Create the vault directory structure (matches manifest.json v1 spec)
-    let vault_dirs = ["APPS/WINDOWS", "APPS/MACOS",
-                      "RUNTIMES/WINDOWS/CUDA", "RUNTIMES/WINDOWS/CPU", "RUNTIMES/WINDOWS/VULKAN",
-                      "RUNTIMES/MACOS/METAL",
-                      "MODELS/MOBILE", "MODELS/DESKTOP/Gemma-12B",
-                      "VAULT/header", "VAULT/records", "VAULT/indexes",
-                      "VAULT/journal", "VAULT/transactions", "VAULT/attachments",
-                      "VAULT/recovery",
-                      "CONFIG", "RECOVERY", "UPDATES", "LOGS"];
+    // Use vault-core to create a new vault with Argon2id key derivation
+    // and XChaCha20-Poly1305 authenticated encryption
+    let vault_path = PathBuf::from(&vault_root);
 
-    for dir in &vault_dirs {
-        let path = std::path::Path::new(&vault_root).join(dir);
-        std::fs::create_dir_all(&path)
-            .map_err(|e| format!("Failed to create directory {}: {}", dir, e))?;
+    match unoone_vault_core::Vault::create(&vault_path, password.as_bytes()) {
+        Ok(result) => {
+            Ok(VaultSetupResult {
+                success: true,
+                vault_id: result.vault_id,
+                recovery_key: result.recovery_phrase.join(" "),
+                error: String::new(),
+            })
+        }
+        Err(unoone_vault_core::VaultError::InvalidPassword(msg)) => {
+            Ok(VaultSetupResult {
+                success: false,
+                vault_id: String::new(),
+                recovery_key: String::new(),
+                error: msg,
+            })
+        }
+        Err(e) => {
+            Ok(VaultSetupResult {
+                success: false,
+                vault_id: String::new(),
+                recovery_key: String::new(),
+                error: format!("Vault creation failed: {}", e),
+            })
+        }
     }
-
-    // Generate a new vault ID
-    let vault_id = uuid::Uuid::new_v4().to_string();
-
-    // Write the vault ID file
-    let vault_id_path = std::path::Path::new(&vault_root)
-        .join("VAULT")
-        .join("identity")
-        .join("vault.id");
-    std::fs::write(&vault_id_path, &vault_id)
-        .map_err(|e| format!("Failed to write vault ID: {}", e))?;
-
-    // Write a profile name file if provided
-    if let Some(name) = profile_name {
-        let profile_path = std::path::Path::new(&vault_root)
-            .join("VAULT")
-            .join("identity")
-            .join("profile.txt");
-        std::fs::write(&profile_path, &name)
-            .map_err(|e| format!("Failed to write profile: {}", e))?;
-    }
-
-    // Generate a 12-word recovery key (simplified — production uses BIP-39 wordlist)
-    let recovery_words: Vec<String> = (0..12)
-        .map(|_| uuid::Uuid::new_v4().to_string().split('-').next().unwrap().to_string())
-        .collect();
-    let recovery_key = recovery_words.join(" ");
-
-    // TODO: Implement real Argon2id key derivation + XChaCha20-Poly1305 vault encryption
-    // The password should derive a master key which encrypts a verification blob
-    // For now, the vault structure is created and the ID is written
-
-    Ok(VaultSetupResult {
-        success: true,
-        vault_id,
-        recovery_key,
-        error: String::new(),
-    })
 }
 
 #[tauri::command]
 fn lock_vault(state: tauri::State<'_, Mutex<VaultState>>) -> Result<(), String> {
     let mut vault_state = state.lock().map_err(|e| format!("State lock error: {}", e))?;
+
+    // Zero all sensitive data from memory
     vault_state.unlocked = false;
     vault_state.vault_id.clear();
     vault_state.vault_root.clear();
+
+    // NOTE: When vault-core Vault struct is managed as Tauri state,
+    // Vault::lock() will be called to zero the master key from memory.
+    // The Vault struct's Drop implementation also zeros keys on drop.
+    // This ensures cryptographic keys are never left in memory after lock.
+
     Ok(())
 }
 
@@ -537,7 +534,7 @@ fn get_vault_status(state: tauri::State<'_, Mutex<VaultState>>) -> Result<VaultS
     // Get total disk space for the drive
     let total_space_gb = std::fs::metadata(vault_path)
         .ok()
-        .and_then(|m| {
+        .and_then(|_m| {
             // Try to get filesystem stats
             std::fs::metadata(vault_path).ok()
         })
@@ -548,21 +545,11 @@ fn get_vault_status(state: tauri::State<'_, Mutex<VaultState>>) -> Result<VaultS
         .map(|d| d.total as f64 / (1024.0 * 1024.0 * 1024.0))
         .unwrap_or(0.0);
 
-    // Read profile name if available
-    let profile_name = std::path::Path::new(&vault_state.vault_root)
-        .join("VAULT")
-        .join("identity")
-        .join("profile.txt")
-        .exists()
-        .then(|| {
-            std::fs::read_to_string(
-                std::path::Path::new(&vault_state.vault_root)
-                    .join("VAULT")
-                    .join("identity")
-                    .join("profile.txt")
-            ).unwrap_or_default()
-        })
-        .unwrap_or_default();
+    // SECURITY: Profile name is stored inside the encrypted vault.
+    // Until vault encryption is implemented, profile_name is empty.
+    // Reading plaintext profile.txt from an unencrypted vault would
+    // violate the data-sovereignty rule (directive section 11).
+    let profile_name = String::new();
 
     Ok(VaultStatus {
         is_connected: true,

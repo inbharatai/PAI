@@ -62,7 +62,7 @@ pub fn get_accessibility_status() -> AccessibilityStatus {
     let mut screen_reader_detected = false;
     let mut screen_reader_name = "Unknown".to_string();
     let mut high_contrast = false;
-    let mut reduced_motion = false;
+    let reduced_motion = false;
     let font_scale = 1.0;
 
     if cfg!(target_os = "windows") {

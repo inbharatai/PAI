@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { tauriApi, type VaultStatus } from '../lib/tauri';
 
 export type ViewId = 'chat' | 'recordings' | 'memory' | 'vault' | 'model' | 'browser' | 'documents' | 'accessibility' | 'settings' | 'hardware';
@@ -16,7 +16,7 @@ export function Sidebar({ currentView, onNavigate, onLock }: SidebarProps) {
     tauriApi.getVaultStatus().then(setVaultStatus).catch(() => {});
   }, []);
 
-  const navItems: { id: ViewId; label: string; icon: JSX.Element }[] = [
+  const navItems: { id: ViewId; label: string; icon: React.ReactElement }[] = [
     {
       id: 'chat',
       label: 'Chat',
@@ -108,7 +108,7 @@ export function Sidebar({ currentView, onNavigate, onLock }: SidebarProps) {
     },
   ];
 
-  const systemItems: { id: ViewId; label: string; icon: JSX.Element }[] = [
+  const systemItems: { id: ViewId; label: string; icon: React.ReactElement }[] = [
     {
       id: 'hardware',
       label: 'Hardware',

@@ -180,7 +180,7 @@ impl DocumentProcessor {
                                     match std::fs::read_to_string(&path) {
                                         Ok(text) => {
                                             let word_count = text.split_whitespace().count();
-                                            let preview = if text.len() > 500 {
+                                            let _preview = if text.len() > 500 {
                                                 format!("{}...[truncated, {} words total]", &text[..500], word_count)
                                             } else {
                                                 text.clone()
