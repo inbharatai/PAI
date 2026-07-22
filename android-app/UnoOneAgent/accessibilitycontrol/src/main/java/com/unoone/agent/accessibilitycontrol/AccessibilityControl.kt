@@ -204,4 +204,36 @@ class AccessibilityControl {
     /** Exact foreground package observed from TYPE_WINDOW_STATE_CHANGED events. */
     fun getCurrentPackage(): String? =
         UnoOneAccessibilityService.getInstance()?.currentPackage
+
+    /**
+     * Click a specific accessibility node by its view ID resource name (e.g. "com.whatsapp:id/send_button").
+     * More precise than text-based clicking — the model proposes a node_id from a previous read_screen.
+     */
+    fun clickNodeById(nodeId: String): Result<Unit> {
+        val service = UnoOneAccessibilityService.getInstance()
+            ?: return Result.Error("Accessibility Service not enabled")
+        return if (service.clickNodeById(nodeId)) Result.Success(Unit)
+        else Result.Error("Could not click node: $nodeId")
+    }
+
+    /**
+     * Type text into a specific accessibility node by its view ID resource name.
+     * More precise than text-based filling — the model proposes a node_id from a previous read_screen.
+     */
+    fun typeIntoNodeById(nodeId: String, text: String): Result<Unit> {
+        val service = UnoOneAccessibilityService.getInstance()
+            ?: return Result.Error("Accessibility Service not enabled")
+        return if (service.typeIntoNodeById(nodeId, text)) Result.Success(Unit)
+        else Result.Error("Could not type into node: $nodeId")
+    }
+
+    /**
+     * Long-press a specific accessibility node by its view ID resource name.
+     */
+    fun longPressNodeById(nodeId: String): Result<Unit> {
+        val service = UnoOneAccessibilityService.getInstance()
+            ?: return Result.Error("Accessibility Service not enabled")
+        return if (service.longPressNodeById(nodeId)) Result.Success(Unit)
+        else Result.Error("Could not long-press node: $nodeId")
+    }
 }

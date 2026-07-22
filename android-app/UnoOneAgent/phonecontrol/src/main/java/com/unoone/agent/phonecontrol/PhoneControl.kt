@@ -329,4 +329,65 @@ class PhoneControl(private val context: Context) {
                 Intent.FLAG_ACTIVITY_CLEAR_TOP or
                 Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
     }
+
+    /**
+     * Resolve a contact name or query to a phone number using the Android Contacts Provider.
+     * Returns the phone number (with country code if available) for the best match,
+     * or the raw query if no match is found (may be a number already).
+     */
+    fun resolveContactName(query: String): Result<String> {
+        return try {
+            val sanitized = InputSanitizer.sanitizeForAccessibility(query)
+            if (sanitized.isBlank()) return Result.Error("resolve_contact requires a query")
+
+            // Check if the query is already a phone number
+            val stripped = sanitized.replace(Regex("[^\\d+]"), "")
+            if (stripped.matches(Regex("^\\+?\\d{8,15}$"))) {
+                return Result.Success(stripped)
+            }
+
+            // Search contacts by name
+            val uri = android.provider.ContactsContract.CommonDataKinds.Phone.CONTENT_URI
+            val projection = arrayOf(
+                android.provider.ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+                android.provider.ContactsContract.CommonDataKinds.Phone.NUMBER
+            )
+            val selection = "${android.provider.ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} LIKE ?"
+            val selectionArgs = arrayOf("%$sanitized%")
+
+            val matches = mutableListOf<Pair<String, String>>()
+            context.contentResolver.query(uri, projection, selection, selectionArgs, null)?.use { cursor ->
+                while (cursor.moveToNext()) {
+                    val name = cursor.getString(0) ?: continue
+                    val number = cursor.getString(1) ?: continue
+                    matches.add(name to number)
+                }
+            }
+
+            when {
+                matches.isEmpty() -> {
+                    // No match found — return the query as-is (may be a number or unrecognized name)
+                    Result.Success(sanitized)
+                }
+                matches.size == 1 -> {
+                    val (name, number) = matches.first()
+                    Logger.d("PhoneControl: resolved '$query' to '$number' ($name)")
+                    Result.Success(number)
+                }
+                else -> {
+                    // Multiple matches — pick the best one (exact name match first, then first result)
+                    val exact = matches.firstOrNull { it.first.equals(sanitized, ignoreCase = true) }
+                    val (name, number) = exact ?: matches.first()
+                    Logger.d("PhoneControl: resolved '$query' to '$number' ($name) from ${matches.size} matches")
+                    Result.Success(number)
+                }
+            }
+        } catch (e: SecurityException) {
+            Logger.e("PhoneControl: contacts permission denied", e)
+            Result.Error("Contacts permission required to resolve '$query'")
+        } catch (e: Exception) {
+            Logger.e("PhoneControl: contact resolution failed", e)
+            Result.Error("Could not resolve contact '$query': ${e.message}")
+        }
+    }
 }

@@ -208,6 +208,135 @@ class ActionExecutor(
                 "ocr_screen" -> readScreenWithOcr()
                 "read_screen" -> readScreenWithAccessibility()
                 "describe_scene" -> describeScene(toolCall)
+
+                // --- Atomic accessibility tools (prefer over system_control) ---
+
+                "go_home" -> accessibilityControl.goHome().map { "Went home" }
+                "go_back" -> accessibilityControl.goBack().map { "Went back" }
+                "scroll" -> {
+                    val direction = toolCall.args["direction"]?.jsonPrimitive?.content?.lowercase() ?: ""
+                    when (direction) {
+                        "up" -> accessibilityControl.scrollUp().map { "Scrolled up" }
+                        "down" -> accessibilityControl.scrollDown().map { "Scrolled down" }
+                        else -> Result.Error("Unknown scroll direction: $direction. Use 'up' or 'down'.")
+                    }
+                }
+                "click_accessibility_node" -> {
+                    val nodeId = toolCall.args["node_id"]?.jsonPrimitive?.content ?: ""
+                    if (nodeId.isBlank()) Result.Error("click_accessibility_node requires a node_id")
+                    else accessibilityControl.clickNodeById(nodeId).map { "Clicked node $nodeId" }
+                }
+                "type_into_accessibility_node" -> {
+                    val nodeId = toolCall.args["node_id"]?.jsonPrimitive?.content ?: ""
+                    val text = toolCall.args["text"]?.jsonPrimitive?.content ?: ""
+                    if (nodeId.isBlank()) Result.Error("type_into_accessibility_node requires a node_id")
+                    else accessibilityControl.typeIntoNodeById(nodeId, text).map { "Typed text into $nodeId" }
+                }
+                "open_notifications" -> accessibilityControl.openNotifications().map { "Opened notifications" }
+                "open_recents" -> accessibilityControl.openRecents().map { "Opened recents" }
+                "long_press_accessibility_node" -> {
+                    val nodeId = toolCall.args["node_id"]?.jsonPrimitive?.content ?: ""
+                    if (nodeId.isBlank()) Result.Error("long_press_accessibility_node requires a node_id")
+                    else accessibilityControl.longPressNodeById(nodeId).map { "Long pressed node $nodeId" }
+                }
+
+                // --- Messaging tools (prefer over send_whatsapp) ---
+
+                "resolve_contact" -> {
+                    val query = toolCall.args["query"]?.jsonPrimitive?.content ?: ""
+                    if (query.isBlank()) Result.Error("resolve_contact requires a query")
+                    else {
+                        // Resolve contact name to phone number via PhoneControl contacts lookup
+                        val resolved = phoneControl.resolveContactName(query)
+                        if (resolved is Result.Success) {
+                            Result.Success("Resolved '$query' to ${resolved.data}")
+                        } else resolved as Result<String>
+                    }
+                }
+                "draft_whatsapp_message" -> {
+                    val contact = toolCall.args["contact_name"]?.jsonPrimitive?.content ?: ""
+                    val msg = toolCall.args["message"]?.jsonPrimitive?.content ?: ""
+                    if (contact.isBlank()) Result.Error("draft_whatsapp_message requires a contact_name")
+                    else {
+                        // Resolve contact name to number, then open WhatsApp draft
+                        val resolved = phoneControl.resolveContactName(contact)
+                        val number = when (resolved) {
+                            is Result.Success -> resolved.data
+                            is Result.Error -> contact // Fall back to raw input (may be a number already)
+                        }
+                        verifyForegroundLaunch(
+                            phoneControl.sendWhatsAppMessage(number, msg),
+                            actionLabel = "WhatsApp",
+                            successMessage = "WhatsApp draft opened for $contact. Please review and press send."
+                        )
+                    }
+                }
+                "send_prepared_whatsapp" -> {
+                    val contact = toolCall.args["contact_name"]?.jsonPrimitive?.content ?: ""
+                    val msg = toolCall.args["message"]?.jsonPrimitive?.content ?: ""
+                    if (contact.isBlank()) Result.Error("send_prepared_whatsapp requires a contact_name")
+                    else {
+                        // Same as draft_whatsapp_message but semantically distinct:
+                        // this tool is called after user confirmation of the draft
+                        val resolved = phoneControl.resolveContactName(contact)
+                        val number = when (resolved) {
+                            is Result.Success -> resolved.data
+                            is Result.Error -> contact
+                        }
+                        verifyForegroundLaunch(
+                            phoneControl.sendWhatsAppMessage(number, msg),
+                            actionLabel = "WhatsApp",
+                            successMessage = "WhatsApp message sent to $contact."
+                        )
+                    }
+                }
+
+                // --- Calendar tools (prefer over open_calendar_insert) ---
+
+                "check_calendar_conflict" -> {
+                    // Check for calendar conflicts at a proposed time
+                    val now = System.currentTimeMillis()
+                    val eventsResult = calendarControl.getEvents(now, now + 7 * 86_400_000L) // Check next 7 days
+                    if (eventsResult is Result.Success) {
+                        val events = eventsResult.data
+                        val date = toolCall.args["date"]?.jsonPrimitive?.content ?: ""
+                        val startTime = toolCall.args["start_time"]?.jsonPrimitive?.content ?: ""
+                        if (events.isEmpty()) {
+                            Result.Success("No calendar conflicts found. The schedule is clear.")
+                        } else {
+                            val eventList = events.take(5).joinToString("; ") {
+                                "${it.title} at ${it.startTime}"
+                            }
+                            Result.Success("Found ${events.size} upcoming event(s). Nearest: $eventList")
+                        }
+                    } else Result.Error("Calendar access failed.")
+                }
+                "create_calendar_event" -> {
+                    val title = toolCall.args["title"]?.jsonPrimitive?.content ?: "Untitled event"
+                    val start = parseTimeMs(toolCall.args["start_time"]?.jsonPrimitive?.content)
+                    val end = parseTimeMs(toolCall.args["end_time"]?.jsonPrimitive?.content)
+                        ?: (start?.plus(3_600_000L))
+                    if (start == null) {
+                        // Try to parse the date field as a fallback
+                        val dateStr = toolCall.args["date"]?.jsonPrimitive?.content
+                        val parsedStart = dateStr?.let { parseTimeMs(it) }
+                        if (parsedStart != null) {
+                            verifyForegroundLaunch(
+                                phoneControl.openCalendarInsert(title, parsedStart, end ?: parsedStart + 3_600_000L),
+                                actionLabel = "Calendar",
+                                successMessage = "Calendar event created for '$title'."
+                            )
+                        } else {
+                            Result.Error("Calendar date or time is missing or ambiguous. Please give an exact date and time.")
+                        }
+                    } else {
+                        verifyForegroundLaunch(
+                            phoneControl.openCalendarInsert(title, start, end ?: start + 3_600_000L),
+                            actionLabel = "Calendar",
+                            successMessage = "Calendar event created for '$title'."
+                        )
+                    }
+                }
                 "detect_objects" -> {
                     _setBlindAidActive?.invoke(true)
                     Result.Success("Blind Aid activated.")
