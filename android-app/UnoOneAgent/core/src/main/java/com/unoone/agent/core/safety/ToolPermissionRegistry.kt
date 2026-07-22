@@ -33,6 +33,9 @@ object ToolPermissionRegistry {
         // Communication apps — launched via intent; no runtime permission needed.
         "draft_email" to listOf(PermissionRequirement.None),
         "send_whatsapp" to listOf(PermissionRequirement.None),
+        "draft_whatsapp_message" to listOf(PermissionRequirement.None),
+        "send_prepared_whatsapp" to listOf(PermissionRequirement.None),
+        "resolve_contact" to listOf(PermissionRequirement.RuntimePerm(Manifest.permission.READ_CONTACTS)),
         "open_dialer" to listOf(PermissionRequirement.None), // dialer intent is safe; no permission
         "share_text" to listOf(PermissionRequirement.None),
 
@@ -45,12 +48,24 @@ object ToolPermissionRegistry {
         // Calendar.
         "open_calendar" to listOf(PermissionRequirement.None), // launcher intent; no permission
         "check_calendar" to listOf(PermissionRequirement.RuntimePerm(Manifest.permission.READ_CALENDAR)),
+        "check_calendar_conflict" to listOf(PermissionRequirement.RuntimePerm(Manifest.permission.READ_CALENDAR)),
         // ACTION_INSERT only opens the calendar's own review UI; UnoOne never writes the provider.
         "open_calendar_insert" to listOf(PermissionRequirement.None),
+        "create_calendar_event" to listOf(PermissionRequirement.RuntimePerm(Manifest.permission.READ_CALENDAR)),
 
         // Screen / UI control — Accessibility (NOT overlay).
         "system_control" to listOf(PermissionRequirement.Accessibility),
         "read_screen" to listOf(PermissionRequirement.Accessibility),
+
+        // Atomic accessibility tools — all need Accessibility service.
+        "go_home" to listOf(PermissionRequirement.Accessibility),
+        "go_back" to listOf(PermissionRequirement.Accessibility),
+        "scroll" to listOf(PermissionRequirement.Accessibility),
+        "click_accessibility_node" to listOf(PermissionRequirement.Accessibility),
+        "type_into_accessibility_node" to listOf(PermissionRequirement.Accessibility),
+        "open_notifications" to listOf(PermissionRequirement.Accessibility),
+        "open_recents" to listOf(PermissionRequirement.Accessibility),
+        "long_press_accessibility_node" to listOf(PermissionRequirement.Accessibility),
 
         // Screenshot OCR — MediaProjection (NOT overlay). Camera not required for screenshots.
         "ocr_screen" to listOf(PermissionRequirement.MediaProjection),

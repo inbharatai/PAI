@@ -17,10 +17,21 @@ class SafetyGuard {
         "prepare_document_fill" to RiskLevel.DIRECT,
         "check_calendar" to RiskLevel.DIRECT,
         "open_calendar" to RiskLevel.DIRECT,
+        // Atomic accessibility — navigation actions are direct (safe, reversible)
+        "go_home" to RiskLevel.DIRECT,
+        "go_back" to RiskLevel.DIRECT,
+        "scroll" to RiskLevel.DIRECT,
+        "open_notifications" to RiskLevel.DIRECT,
+        "open_recents" to RiskLevel.DIRECT,
+        // Contact resolution is direct (read-only lookup)
+        "resolve_contact" to RiskLevel.DIRECT,
+        // Calendar conflict check is direct (read-only)
+        "check_calendar_conflict" to RiskLevel.DIRECT,
 
         // Risk 1 — Single confirmation
         "open_url" to RiskLevel.CONFIRM,
         "open_calendar_insert" to RiskLevel.CONFIRM,
+        "create_calendar_event" to RiskLevel.CONFIRM,
         "open_dialer" to RiskLevel.CONFIRM,
         "share_text" to RiskLevel.CONFIRM,
         "read_screen" to RiskLevel.CONFIRM,
@@ -29,7 +40,10 @@ class SafetyGuard {
         "create_skill" to RiskLevel.CONFIRM,
         "long_press" to RiskLevel.CONFIRM,
         "click" to RiskLevel.CONFIRM,
+        "click_accessibility_node" to RiskLevel.CONFIRM,
         "type" to RiskLevel.CONFIRM,
+        "type_into_accessibility_node" to RiskLevel.CONFIRM,
+        "long_press_accessibility_node" to RiskLevel.CONFIRM,
         // Mic capture + online lookup both touch privacy-sensitive surfaces → single confirmation.
         "voice_recording" to RiskLevel.CONFIRM,
         "web_search" to RiskLevel.CONFIRM,
@@ -38,6 +52,8 @@ class SafetyGuard {
         // BrowserSafetyPolicy per-action confirm/takeover inside the session; this tier only authorizes
         // opening the automated browser session.
         "secure_browser_task" to RiskLevel.CONFIRM,
+        // WhatsApp draft — user reviews before send
+        "draft_whatsapp_message" to RiskLevel.CONFIRM,
 
         // Risk 2 — Strong confirmation (must type "confirm")
         "delete_notes" to RiskLevel.STRONG_CONFIRM,
@@ -46,6 +62,7 @@ class SafetyGuard {
         "detect_objects" to RiskLevel.STRONG_CONFIRM,
         "draft_email" to RiskLevel.STRONG_CONFIRM,
         "send_whatsapp" to RiskLevel.STRONG_CONFIRM,
+        "send_prepared_whatsapp" to RiskLevel.STRONG_CONFIRM,
         "system_control" to RiskLevel.STRONG_CONFIRM,
         "find_and_click" to RiskLevel.STRONG_CONFIRM,
         "fill" to RiskLevel.STRONG_CONFIRM,

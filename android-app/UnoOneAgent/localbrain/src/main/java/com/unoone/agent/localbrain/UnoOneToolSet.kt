@@ -197,4 +197,75 @@ class UnoOneToolSet : ToolSet {
     fun prepare_document_fill(
         @ToolParam(description = "Document format: pdf or docx") format: String
     ): String = "Opening offline document fill for $format."
+
+    // --- Atomic accessibility tools (prefer over system_control) ---
+
+    @Tool(description = "Navigate to the device home screen")
+    fun go_home(): String = "Navigating home."
+
+    @Tool(description = "Navigate back to the previous screen")
+    fun go_back(): String = "Navigating back."
+
+    @Tool(description = "Scroll in a direction: up, down, left, or right")
+    fun scroll(
+        @ToolParam(description = "Direction to scroll: up, down, left, or right") direction: String
+    ): String = "Scrolling $direction."
+
+    @Tool(description = "Click an accessibility node by its node ID for precise UI interaction")
+    fun click_accessibility_node(
+        @ToolParam(description = "The accessibility node ID to click") node_id: String
+    ): String = "Clicking node $node_id."
+
+    @Tool(description = "Type text into an accessibility node by its node ID")
+    fun type_into_accessibility_node(
+        @ToolParam(description = "The accessibility node ID to type into") node_id: String,
+        @ToolParam(description = "The text to type") text: String
+    ): String = "Typing into node $node_id."
+
+    @Tool(description = "Open the notification shade")
+    fun open_notifications(): String = "Opening notifications."
+
+    @Tool(description = "Open the recent apps switcher")
+    fun open_recents(): String = "Opening recent apps."
+
+    @Tool(description = "Long-press an accessibility node by its node ID")
+    fun long_press_accessibility_node(
+        @ToolParam(description = "The accessibility node ID to long-press") node_id: String
+    ): String = "Long-pressing node $node_id."
+
+    // --- Messaging tools (prefer over send_whatsapp) ---
+
+    @Tool(description = "Resolve a contact name to a WhatsApp-reachable phone number. Use this first before drafting a WhatsApp message.")
+    fun resolve_contact(
+        @ToolParam(description = "Contact name or query to look up") query: String
+    ): String = "Resolving contact: $query."
+
+    @Tool(description = "Open WhatsApp with a pre-filled message draft for the specified contact. The user must review and press send.")
+    fun draft_whatsapp_message(
+        @ToolParam(description = "Contact name or phone number") contact_name: String,
+        @ToolParam(description = "Message text to pre-fill") message: String
+    ): String = "WhatsApp draft prepared for $contact_name."
+
+    @Tool(description = "Send a prepared WhatsApp message after user confirmation")
+    fun send_prepared_whatsapp(
+        @ToolParam(description = "Contact name or phone number") contact_name: String,
+        @ToolParam(description = "Message text to send") message: String
+    ): String = "Sending WhatsApp message to $contact_name."
+
+    // --- Calendar tools (prefer over open_calendar_insert) ---
+
+    @Tool(description = "Check for calendar conflicts at a proposed time before creating an event")
+    fun check_calendar_conflict(
+        @ToolParam(description = "Date for the event (e.g. '2026-07-22')") date: String? = null,
+        @ToolParam(description = "Start time (e.g. '15:00')") start_time: String? = null,
+        @ToolParam(description = "End time (e.g. '16:00')") end_time: String? = null
+    ): String = "Checking calendar conflicts."
+
+    @Tool(description = "Create a calendar event. Always check for conflicts first using check_calendar_conflict.")
+    fun create_calendar_event(
+        @ToolParam(description = "Event title") title: String,
+        @ToolParam(description = "Date for the event (e.g. '2026-07-22')") date: String? = null,
+        @ToolParam(description = "Start time (e.g. '15:00')") start_time: String? = null,
+        @ToolParam(description = "End time (e.g. '16:00')") end_time: String? = null
+    ): String = "Creating calendar event: $title."
 }
