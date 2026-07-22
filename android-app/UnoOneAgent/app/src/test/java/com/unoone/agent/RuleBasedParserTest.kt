@@ -119,15 +119,15 @@ class RuleBasedParserTest {
         // so the compound handler splits and parses them correctly into an ordered
         // `steps` array. Domain-specific rules (skill, email, whatsapp, calendar) are
         // checked BEFORE compound splitting, so they preserve their internal "and" semantics.
+        // After Phase 2 refactoring, scroll/go_home are now atomic tools (not system_control).
         val toolCall = RuleBasedParser.parse("scroll down and go home")
         assertNotNull("Compound command should parse", toolCall)
         assertEquals("compound", toolCall!!.tool)
         val steps = toolCall.compoundSteps()
         assertEquals("Compound must expand to 2 ordered steps", 2, steps.size)
-        assertEquals("system_control", steps[0].tool)
-        assertEquals("system_control", steps[1].tool)
-        assertEquals("scroll_down", steps[0].args["action"]?.jsonPrimitive?.content)
-        assertEquals("go_home", steps[1].args["action"]?.jsonPrimitive?.content)
+        assertEquals("scroll", steps[0].tool)
+        assertEquals("go_home", steps[1].tool)
+        assertEquals("down", steps[0].args["direction"]?.jsonPrimitive?.content)
     }
 
     @Test
@@ -193,6 +193,50 @@ class RuleBasedParserTest {
     }
 
     @Test
+    fun testScrollDownEmitsAtomicScrollTool() {
+        val toolCall = RuleBasedParser.parse("scroll down")
+        assertNotNull(toolCall)
+        assertEquals("scroll", toolCall!!.tool)
+        assertEquals("down", toolCall.args["direction"]?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun testScrollUpEmitsAtomicScrollTool() {
+        val toolCall = RuleBasedParser.parse("scroll up")
+        assertNotNull(toolCall)
+        assertEquals("scroll", toolCall!!.tool)
+        assertEquals("up", toolCall.args["direction"]?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun testGoHomeEmitsAtomicGoHome() {
+        val toolCall = RuleBasedParser.parse("go home")
+        assertNotNull(toolCall)
+        assertEquals("go_home", toolCall!!.tool)
+    }
+
+    @Test
+    fun testGoBackEmitsAtomicGoBack() {
+        val toolCall = RuleBasedParser.parse("go back")
+        assertNotNull(toolCall)
+        assertEquals("go_back", toolCall!!.tool)
+    }
+
+    @Test
+    fun testOpenNotificationsEmitsAtomicTool() {
+        val toolCall = RuleBasedParser.parse("open notifications")
+        assertNotNull(toolCall)
+        assertEquals("open_notifications", toolCall!!.tool)
+    }
+
+    @Test
+    fun testOpenRecentsEmitsAtomicTool() {
+        val toolCall = RuleBasedParser.parse("open recents")
+        assertNotNull(toolCall)
+        assertEquals("open_recents", toolCall!!.tool)
+    }
+
+    @Test
     fun testActivationNotConfusedByDeactivation() {
         // Ensure "deactivate blind aid" does NOT match activation
         val toolCall = RuleBasedParser.parse("deactivate blind aid")
@@ -255,16 +299,16 @@ class RuleBasedParserTest {
     fun testThreePartCompoundCommand() {
         // "A and B and C" must parse into a compound with all 3 steps preserved in order
         // (the 3rd part was previously parsed and discarded).
+        // After Phase 2: scroll down → scroll(direction=down), go home → go_home()
         val toolCall = RuleBasedParser.parse("open chrome and scroll down and go home")
         assertNotNull(toolCall)
         assertEquals("compound", toolCall!!.tool)
         val steps = toolCall.compoundSteps()
         assertEquals("Three-part compound must expand to 3 ordered steps", 3, steps.size)
         assertEquals("open_chrome", steps[0].tool)
-        assertEquals("system_control", steps[1].tool)
-        assertEquals("system_control", steps[2].tool)
-        assertEquals("scroll_down", steps[1].args["action"]?.jsonPrimitive?.content)
-        assertEquals("go_home", steps[2].args["action"]?.jsonPrimitive?.content)
+        assertEquals("scroll", steps[1].tool)
+        assertEquals("go_home", steps[2].tool)
+        assertEquals("down", steps[1].args["direction"]?.jsonPrimitive?.content)
     }
 
     @Test
@@ -278,10 +322,10 @@ class RuleBasedParserTest {
     }
 
     @Test
-    fun testCalendarCheck() {
+    fun testCalendarCheckRoutesToCheckCalendarConflict() {
         val toolCall = RuleBasedParser.parse("check calendar")
         assertNotNull(toolCall)
-        assertEquals("check_calendar", toolCall!!.tool)
+        assertEquals("check_calendar_conflict", toolCall!!.tool)
     }
 
     @Test
@@ -301,17 +345,17 @@ class RuleBasedParserTest {
     }
 
     @Test
-    fun testOpenCalendarInsertStillRoutesToInsert() {
+    fun testAddCalendarRoutesToCreateCalendarEvent() {
         val toolCall = RuleBasedParser.parse("add meeting to calendar")
         assertNotNull(toolCall)
-        assertEquals("open_calendar_insert", toolCall!!.tool)
+        assertEquals("create_calendar_event", toolCall!!.tool)
     }
 
     @Test
-    fun scheduleCalendarCommandRoutesToAReviewableInsert() {
+    fun scheduleCalendarCommandRoutesToCreateCalendarEvent() {
         val toolCall = RuleBasedParser.parse("schedule a meeting tomorrow at 4 PM")
         assertNotNull(toolCall)
-        assertEquals("open_calendar_insert", toolCall!!.tool)
+        assertEquals("create_calendar_event", toolCall!!.tool)
         assertTrue(toolCall.args["start_time"]!!.jsonPrimitive.content.contains("T16:00"))
     }
 
@@ -367,8 +411,8 @@ class RuleBasedParserTest {
     fun testScrollDown() {
         val toolCall = RuleBasedParser.parse("scroll down")
         assertNotNull(toolCall)
-        assertEquals("system_control", toolCall!!.tool)
-        assertEquals("scroll_down", toolCall.args["action"]?.toString()?.replace("\"", ""))
+        assertEquals("scroll", toolCall!!.tool)
+        assertEquals("down", toolCall.args["direction"]?.jsonPrimitive?.content)
     }
 
     // Eyes-free (WS4): the secure-browser friendly names are domain-specific so a trailing task
@@ -521,15 +565,15 @@ class RuleBasedParserTest {
     @Test
     fun whatsappDraftWithoutNumberUsesWhatsAppRecipientPickerPath() {
         val call = RuleBasedParser.parse("write a WhatsApp message saying I will be late")
-        assertEquals("send_whatsapp", call?.tool)
-        assertEquals("", call?.args?.get("number")?.jsonPrimitive?.content)
+        assertEquals("draft_whatsapp_message", call?.tool)
+        assertEquals("", call?.args?.get("contact_name")?.jsonPrimitive?.content)
         assertEquals("I will be late", call?.args?.get("message")?.jsonPrimitive?.content)
     }
 
     @Test
     fun HindiCoreDraftAndCalendarCommandsStayDeterministic() {
         assertEquals(
-            "send_whatsapp",
+            "draft_whatsapp_message",
             RuleBasedParser.parse("मम्मी को व्हाट्सएप पर मैसेज लिखो कि मैं देर से आऊंगा")?.tool
         )
         assertEquals(
@@ -537,7 +581,7 @@ class RuleBasedParserTest {
             RuleBasedParser.parse("ईमेल ड्राफ्ट बनाओ कि रिपोर्ट तैयार है")?.tool
         )
         assertEquals(
-            "open_calendar_insert",
+            "create_calendar_event",
             RuleBasedParser.parse("कल शाम ५ बजे मीटिंग कैलेंडर में जोड़ो")?.tool
         )
     }
