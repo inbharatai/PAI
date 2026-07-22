@@ -21,11 +21,12 @@ object ModelTierSelector {
 
     /**
      * Minimum available RAM (MB) to attempt E4B loading. Below this, force Lite.
-     * Aligned with [BrainModelRegistry.GEMMA_4_E4B.minimumRamMb] (8,192 MB) plus
-     * a 2 GB headroom buffer for the OS and other app processes. Devices with exactly
-     * 8 GB total RAM rarely have 8 GB *available* after OS overhead.
+     * Matches [BrainModelRegistry.GEMMA_4_E4B.minimumRamMb] (8,192 MB).
+     * No current phone provides 10,240 MB free after OS overhead, so the previous
+     * 10,240 threshold made E4B unreachable in practice. 8,192 MB aligns with
+     * the manifest's actual minimum and still excludes devices below 8 GB total.
      */
-    const val E4B_MIN_RAM_MB: Int = 10_240
+    const val E4B_MIN_RAM_MB: Int = 8_192
 
     /**
      * Select the appropriate model profile for a command.

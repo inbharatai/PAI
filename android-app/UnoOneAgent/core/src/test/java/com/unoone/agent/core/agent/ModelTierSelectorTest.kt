@@ -216,8 +216,9 @@ class ModelTierSelectorTest {
     }
 
     @Test
-    fun e4bMinRam_is10240() {
-        assertEquals(10_240, ModelTierSelector.E4B_MIN_RAM_MB)
+    fun e4bMinRam_matchesManifestMinimum() {
+        // Must match BrainModelRegistry.GEMMA_4_E4B.minimumRamMb (8,192 MB)
+        assertEquals(8_192, ModelTierSelector.E4B_MIN_RAM_MB)
     }
 
     // ── Explicit RAM (no silent Int.MAX_VALUE default) ──────────────────
