@@ -10,7 +10,7 @@ use crate::security;
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 
-const MAX_AGENT_STEPS: u32 = 6;
+const MAX_AGENT_STEPS: u32 = 5;
 
 /// A single step in the agent's reasoning process.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,14 +54,14 @@ impl<'a> ToolExecutor<'a> {
         let results = documents::search_memories(search_query, self.vault_root.to_string());
 
         if results.is_empty() {
-            format!("No results found for '{}'. The vault may be empty or no documents match.", query)
+            format!("No results for '{}'.", query)
         } else {
-            let mut output = format!("Found {} result(s) for '{}':\n", results.len(), query);
+            let mut output = format!("Found {} result(s):\n", results.len());
             for result in &results {
                 output.push_str(&format!(
-                    "- [{}] {} (relevance: {:.0}%)\n  {}\n",
-                    result.memory_type,
+                    "- {} [{}] {:.0}% relevant\n  {}\n",
                     result.title,
+                    result.memory_type,
                     result.relevance * 100.0,
                     result.preview
                 ));
@@ -75,37 +75,25 @@ impl<'a> ToolExecutor<'a> {
         let docs = documents::list_documents(self.vault_root.to_string());
 
         if docs.is_empty() {
-            "No documents found in the vault. Add documents to the VAULT/documents directory.".to_string()
+            "No documents in the vault.".to_string()
         } else {
-            let mut output = format!("Found {} document(s) in the vault:\n", docs.len());
+            let mut output = format!("{} document(s):\n", docs.len());
             for doc in &docs {
-                let type_icon = match doc.document_type {
-                    documents::DocumentType::Txt => "📄",
-                    documents::DocumentType::Markdown => "📝",
-                    documents::DocumentType::Pdf => "📕",
-                    documents::DocumentType::Docx => "📘",
-                    _ => "📎",
+                let type_tag = match doc.document_type {
+                    documents::DocumentType::Txt => "TXT",
+                    documents::DocumentType::Markdown => "MD",
+                    documents::DocumentType::Pdf => "PDF",
+                    documents::DocumentType::Docx => "DOCX",
+                    documents::DocumentType::Csv => "CSV",
+                    documents::DocumentType::Xlsx => "XLSX",
+                    documents::DocumentType::Pptx => "PPTX",
+                    documents::DocumentType::Image => "IMG",
+                    documents::DocumentType::Audio => "AUDIO",
+                    documents::DocumentType::WebPage => "WEB",
                 };
-                output.push_str(&format!(
-                    "{} {} [{}] {} bytes\n",
-                    type_icon,
-                    doc.title,
-                    match doc.document_type {
-                        documents::DocumentType::Txt => "TXT",
-                        documents::DocumentType::Markdown => "MD",
-                        documents::DocumentType::Pdf => "PDF",
-                        documents::DocumentType::Docx => "DOCX",
-                        documents::DocumentType::Csv => "CSV",
-                        documents::DocumentType::Xlsx => "XLSX",
-                        documents::DocumentType::Pptx => "PPTX",
-                        documents::DocumentType::Image => "IMG",
-                        documents::DocumentType::Audio => "AUDIO",
-                        documents::DocumentType::WebPage => "WEB",
-                    },
-                    doc.file_size_bytes,
-                ));
+                output.push_str(&format!("- {} [{}] {} bytes\n", doc.title, type_tag, doc.file_size_bytes));
                 if let Some(wc) = doc.word_count {
-                    output.push_str(&format!("   {} words\n", wc));
+                    output.push_str(&format!("  {} words\n", wc));
                 }
             }
             output
@@ -119,18 +107,17 @@ impl<'a> ToolExecutor<'a> {
         if result.success {
             let text = result.extracted_text.unwrap_or_default();
             // Truncate very long documents for the agent context window
-            let truncated = if text.len() > 4000 {
-                format!("{}...\n\n[Document truncated — {} total characters]", &text[..4000], text.len())
+            if text.len() > 4000 {
+                format!("{}...\n\n[Truncated — {} total chars]", &text[..4000], text.len())
             } else {
                 text
-            };
-            truncated
+            }
         } else {
             let error = result.error.unwrap_or_default();
             if error.contains("not yet supported") {
-                format!("Document '{}' is in a binary format. Only text files (.txt, .md) are currently supported for reading. Error: {}", document_id, error)
+                format!("Cannot read '{}' — binary format. Only .txt and .md are supported.", document_id)
             } else {
-                format!("Could not read document '{}': {}", document_id, error)
+                format!("Cannot read '{}': {}", document_id, error)
             }
         }
     }
@@ -140,17 +127,14 @@ impl<'a> ToolExecutor<'a> {
         match security::verify_manifest(self.vault_root.to_string()) {
             Ok(result) => {
                 if result.manifest_valid && result.hmac_valid {
-                    format!(
-                        "✅ Vault integrity verified: {} files OK, HMAC signature valid. Total: {} files.",
-                        result.entries_verified, result.total_entries
-                    )
+                    format!("Vault OK — {} files verified, HMAC valid.", result.entries_verified)
                 } else {
                     let mut output = format!(
-                        "⚠️ Vault integrity check failed: {} of {} files failed.",
+                        "Vault check failed: {}/{} files failed.",
                         result.entries_failed, result.total_entries
                     );
                     if !result.hmac_valid {
-                        output.push_str("\n❌ Manifest HMAC signature is INVALID — the vault manifest may have been tampered with.");
+                        output.push_str(" HMAC signature INVALID.");
                     }
                     for err in &result.errors {
                         output.push_str(&format!("\n  - {}", err));
@@ -158,7 +142,7 @@ impl<'a> ToolExecutor<'a> {
                     output
                 }
             }
-            Err(e) => format!("Could not verify vault: {}", e),
+            Err(e) => format!("Cannot verify vault: {}", e),
         }
     }
 }
@@ -176,34 +160,37 @@ impl AgentLoopState {
 }
 
 /// System prompt for the agentic loop.
+/// Clean and direct — like Gemini/ChatGPT: identity first, tool rules second.
 fn get_system_prompt() -> String {
-    "You are UnoOne, a private AI assistant running on the user's encrypted vault. \
-     You have access to tools for searching notes, listing documents, and reading vault content. \
-     Always reason step-by-step. When you need information, use the appropriate tool. \
-     When you have enough information to answer the user's question, respond directly without calling tools. \
-     If a tool call is blocked by safety, acknowledge it and try an alternative approach."
+    "You are UnoOne, a private AI assistant. You run entirely on the user's encrypted USB vault — no data leaves the device.\n\
+     \n\
+     Tools: search_notes, list_documents, read_document, verify_vault.\n\
+     - Use tools when you need information from the vault to answer a question.\n\
+     - Answer directly from your knowledge when tools aren't needed.\n\
+     - If a tool call is blocked, explain briefly and try an alternative.\n\
+     - Never reveal internal tool mechanics to the user — respond naturally."
         .to_string()
 }
 
 /// D3: Tool definitions available to the model.
-/// These mirror the real tool implementations that read from vault state.
+/// Concise descriptions — models work best with brief, clear tool specs.
 fn get_tool_definitions() -> Vec<ToolDefinition> {
     vec![
         ToolDefinition {
             name: "search_notes".to_string(),
-            description: "Search for notes and documents in the encrypted vault by query string. Returns matching documents with previews.".to_string(),
+            description: "Search notes and documents in the vault by keyword.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "query": { "type": "string", "description": "Search query" },
-                    "limit": { "type": "integer", "description": "Maximum number of results to return (default 10)" }
+                    "query": { "type": "string", "description": "Search keywords" },
+                    "limit": { "type": "integer", "description": "Max results (default 10)" }
                 },
                 "required": ["query"]
             }),
         },
         ToolDefinition {
             name: "list_documents".to_string(),
-            description: "List all documents stored in the encrypted vault. Returns document names, types, and sizes.".to_string(),
+            description: "List all documents stored in the vault.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {}
@@ -211,18 +198,18 @@ fn get_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "read_document".to_string(),
-            description: "Read the contents of a specific document from the vault. Supports text and markdown files.".to_string(),
+            description: "Read a document's contents from the vault.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "document_id": { "type": "string", "description": "The document ID or filename to read" }
+                    "document_id": { "type": "string", "description": "Document filename or ID" }
                 },
                 "required": ["document_id"]
             }),
         },
         ToolDefinition {
             name: "verify_vault".to_string(),
-            description: "Verify the integrity of the encrypted vault by checking HMAC signatures and file hashes. Reports any tampering or missing files.".to_string(),
+            description: "Verify vault integrity — checks file hashes and HMAC signatures.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {}
@@ -396,7 +383,7 @@ pub async fn agent_chat(
     // If we exhausted max steps without a final response
     if !steps.iter().any(|s| matches!(s, AgentStep::FinalResponse { .. })) {
         steps.push(AgentStep::FinalResponse {
-            text: "I've reached the maximum number of reasoning steps. Here's what I found so far.".to_string(),
+            text: "I need more steps to complete this. Could you rephrase or be more specific?".to_string(),
         });
     }
 
