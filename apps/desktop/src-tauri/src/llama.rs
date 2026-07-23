@@ -177,10 +177,12 @@ pub struct ModelInfo {
 
 /// Model manager state
 pub struct ModelManager {
+    #[allow(dead_code)]
     config: Mutex<Option<ModelConfig>>,
     status: Mutex<ModelStatus>,
     backend: Mutex<AccelerationBackend>,
     llama_process: Mutex<Option<std::process::Child>>,
+    #[allow(dead_code)]
     model_info: Mutex<Option<ModelInfo>>,
 }
 
@@ -685,7 +687,7 @@ impl ModelManager {
             .and_then(|m| m.get("tool_calls"))
             .and_then(|tc| tc.as_array())
             .map(|arr| {
-                arr.iter().filter_map(|tc| {
+                arr.iter().map(|tc| {
                     let id = tc.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
                     let name = tc.get("function")
                         .and_then(|f| f.get("name"))
@@ -696,7 +698,7 @@ impl ModelManager {
                         .and_then(|a| a.as_str())
                         .and_then(|s| serde_json::from_str(s).ok())
                         .unwrap_or(serde_json::Value::Object(Default::default()));
-                    Some(ToolCallResult { id, name, arguments })
+                    ToolCallResult { id, name, arguments }
                 }).collect::<Vec<_>>()
             });
 
@@ -706,7 +708,7 @@ impl ModelManager {
             .map(|s| s.to_string());
 
         // If no structured tool_calls but text contains tool-call JSON, parse as fallback
-        let final_tool_calls = if tool_calls.as_ref().map_or(true, |tc| tc.is_empty()) {
+        let final_tool_calls = if tool_calls.as_ref().is_none_or(|tc| tc.is_empty()) {
             Self::parse_text_tool_calls(&text)
         } else {
             tool_calls

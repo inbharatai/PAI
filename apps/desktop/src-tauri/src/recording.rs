@@ -213,7 +213,7 @@ pub fn stop_recording(
             state.audio_buffer.lock().map_err(|e| format!("State lock error: {}", e))?.clear();
             session.state = RecordingState::Stopped;
             session.vault_record_id = None;
-            return Ok(session.clone());
+            Ok(session.clone())
         }
         PrivacyLevel::Full | PrivacyLevel::TranscriptOnly | PrivacyLevel::SummaryOnly => {
             // These levels write to the encrypted vault.
@@ -236,7 +236,7 @@ pub fn stop_recording(
 
             // Write to encrypted vault
             let record_id = write_recording_to_vault(
-                &session,
+                session,
                 &wav_bytes,
                 &vault_state,
             )?;

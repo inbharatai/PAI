@@ -37,6 +37,7 @@ pub struct TtsResult {
     pub sample_rate: u32,
     pub status: VoiceCapabilityStatus,
     pub error: Option<String>,
+    pub processing_time_ms: u64,
 }
 
 /// Voice engine type
@@ -288,6 +289,7 @@ impl VoiceModule {
                 sample_rate: 22050,
                 status: VoiceCapabilityStatus::NotAvailable,
                 error: Some("TTS is not available. Piper binary not found.".to_string()),
+                processing_time_ms: start.elapsed().as_millis() as u64,
             };
         }
 
@@ -302,6 +304,7 @@ impl VoiceModule {
                     sample_rate: 22050,
                     status: VoiceCapabilityStatus::Error,
                     error: Some("Piper binary not found".to_string()),
+                    processing_time_ms: start.elapsed().as_millis() as u64,
                 };
             }
         };
@@ -331,6 +334,7 @@ impl VoiceModule {
                     sample_rate: 22050,
                     status: VoiceCapabilityStatus::Error,
                     error: Some("No Piper model path configured".to_string()),
+                    processing_time_ms: start.elapsed().as_millis() as u64,
                 };
             }
         };
@@ -358,6 +362,7 @@ impl VoiceModule {
                     sample_rate: 22050,
                     status: VoiceCapabilityStatus::Error,
                     error: Some(format!("Failed to start Piper: {}", e)),
+                    processing_time_ms: start.elapsed().as_millis() as u64,
                 };
             }
         };
@@ -377,6 +382,7 @@ impl VoiceModule {
                     sample_rate: 22050,
                     status: VoiceCapabilityStatus::Error,
                     error: Some(format!("Piper process error: {}", e)),
+                    processing_time_ms: start.elapsed().as_millis() as u64,
                 };
             }
         };
@@ -394,6 +400,7 @@ impl VoiceModule {
                 sample_rate: 22050,
                 status: VoiceCapabilityStatus::Available,
                 error: None,
+                processing_time_ms: start.elapsed().as_millis() as u64,
             }
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -403,6 +410,7 @@ impl VoiceModule {
                 sample_rate: 22050,
                 status: VoiceCapabilityStatus::Error,
                 error: Some(format!("Piper synthesis failed: {}", stderr.trim())),
+                processing_time_ms: start.elapsed().as_millis() as u64,
             }
         }
     }

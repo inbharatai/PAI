@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { tauriApi } from '../lib/tauri';
+import type { ConversationTurn as TauriConversationTurn, Content } from '../lib/tauri';
 
 interface ChatMessage {
   id: string;
@@ -24,13 +25,6 @@ interface AgentResult {
   final_text: string;
   steps: AgentStep[];
   iterations: number;
-}
-
-interface ConversationTurn {
-  role: string;
-  content: string;
-  tool_calls?: unknown[];
-  tool_call_id?: string;
 }
 
 export function ChatView() {
@@ -79,9 +73,9 @@ export function ChatView() {
     setServerError('');
 
     try {
-      const conversationHistory: ConversationTurn[] = messages
+      const conversationHistory: TauriConversationTurn[] = messages
         .filter(m => m.role === 'user' || m.role === 'assistant')
-        .map(msg => ({ role: msg.role, content: msg.content }));
+        .map(msg => ({ role: msg.role as 'user' | 'assistant' | 'tool', content: msg.content as Content }));
 
       const result = await tauriApi.agentChat(input.trim(), conversationHistory);
 

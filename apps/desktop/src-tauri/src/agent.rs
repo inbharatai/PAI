@@ -8,7 +8,6 @@ use crate::llama::{Content, ConversationTurn, InferenceRequest, ModelManagerStat
 use crate::safety::{SafetyGuardState, ToolAction};
 use crate::security;
 use serde::{Deserialize, Serialize};
-use std::sync::Mutex;
 
 const MAX_AGENT_STEPS: u32 = 5;
 
@@ -283,7 +282,7 @@ pub async fn agent_chat(
     let tool_definitions = get_tool_definitions();
     let max_steps = agent_state.max_steps;
 
-    for iteration in 1..=max_steps {
+    for _iteration in 1..=max_steps {
         // 1. Call the model
         let request = InferenceRequest {
             prompt: String::new(), // Using conversation history instead

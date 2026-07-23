@@ -75,8 +75,11 @@ pub struct BrowserActionResult {
 
 /// Active browser session state
 pub struct BrowserSession {
+    #[allow(dead_code)]
     pub active: bool,
+    #[allow(dead_code)]
     pub current_url: Option<String>,
+    #[allow(dead_code)]
     pub title: Option<String>,
 }
 
