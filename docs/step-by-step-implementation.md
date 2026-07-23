@@ -22,7 +22,7 @@
 | 16 | Skill storage | PENDING |
 | 17 | Local memory | PENDING |
 | 18 | Diagnostics (latency, battery) | PENDING |
-| 19 | Accessibility module design | PENDING |
+| 19 | Accessibility module design | **DONE** — Desktop OCR + Blind View via Gemma mmproj, camera via getUserMedia |
 
 ---
 

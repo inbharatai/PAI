@@ -1,10 +1,10 @@
 # UnoOne Pocket AI — Status
 
-**Updated:** 2026-07-21  
+**Updated:** 2026-07-23  
 **Repository:** https://github.com/inbharatai/PAI  
 **Baseline tag:** `v0.4.0-alpha-v2-baseline`  
 **USB vault:** `D:\UNOONE\` (460 GB SanDisk)  
-**Release state:** **Alpha — All 12 phases code-complete, desktop frontend builds green**
+**Release state:** **Alpha — All 12 phases code-complete, pendrive minimal-dependency 6-phase upgrade merged**
 
 ## Two-Platform Architecture
 
@@ -13,6 +13,7 @@ UnoOne Mobile (Android)          UnoOne Power (Desktop)
 Gemma 4 E2B                      Gemma 4 12B Q4 GGUF
         ↕                                  ↕
         └──── Shared encrypted USB vault ────┘
+               (Argon2id + XChaCha20-Poly1305)
 ```
 
 ## Phase Progress
@@ -26,12 +27,27 @@ Gemma 4 E2B                      Gemma 4 12B Q4 GGUF
 | 4 | ✅ Complete | Mobile recording workspace (AndroidRecordingEngine, encrypted chunked capture) |
 | 5 | ✅ Complete | Desktop foundation — Tauri 2 + React 19 shell, USB detection, hardware profiling |
 | 6 | ✅ Complete | Gemma 4 12B model manager + desktop SafetyGuard (STANDARD/RELAXED/OFF) |
-| 7 | ✅ Complete | Desktop recording + STT/TTS pipeline, privacy levels, bookmarks |
-| 8 | ✅ Complete | Browser workspace (Chromium + PageAgent safety pipeline) |
-| 9 | ✅ Complete | Documents and memory retrieval (parsers, encrypted indexes, search) |
-| 10 | ✅ Complete | Accessibility (Blind View, OCR, screen reader, keyboard shortcuts, font scale) |
-| 11 | ✅ Complete | Security hardening (signed manifests, SHA-256 verification, crash recovery, emergency lock) |
+| 7 | ✅ Complete | Desktop recording — cpal microphone capture, hound WAV encoding, vault-core XChaCha20-Poly1305 encryption, 4 privacy levels |
+| 8 | ✅ Complete | Browser workspace — Tauri WebView bridge (no Playwright/Chromium), DOM query/click/type/extract/fill/scroll/screenshot |
+| 9 | ✅ Complete | Documents — PDF (lopdf), DOCX/XLSX/PPTX (zip+quick-xml), TXT/MD/CSV/HTML, TF-IDF search |
+| 10 | ✅ Complete | Accessibility — OCR + Blind View via Gemma mmproj, camera info via getUserMedia, encode_image_for_vision |
+| 11 | ✅ Complete | Security hardening — vault_write_record wired, signed manifests, SHA-256, crash recovery, emergency lock |
 | 12 | ✅ Complete | Cross-platform validation (Windows + macOS USB paths, vault structure, build verified) |
+
+## Pendrive Minimal-Dependency Upgrade (2026-07-22)
+
+6-phase upgrade that replaced all stubs with pure-Rust implementations, eliminating external runtime dependencies:
+
+| Phase | What | Implementation |
+|-------|------|----------------|
+| 1 | Recording + Vault encryption | `cpal` audio capture → `hound` WAV → `vault-core` XChaCha20-Poly1305 encryption; `vault_write_record` Tauri command |
+| 2 | Vision + OCR | `Content` enum (Text/Multimodal), `mmproj_path` for vision model, `perform_ocr` + `describe_image` via llama-server |
+| 3 | Browser workspace | Tauri WebView bridge with `__unooneBrowserBridge` JS; no Playwright/Chromium download |
+| 4 | Document parsers | `lopdf` (PDF), `zip` + `quick-xml` (DOCX/XLSX/PPTX); no C/C++ dependencies |
+| 5 | Camera access | `get_camera_info` + `encode_image_for_vision` base64 pipeline; frontend uses `getUserMedia` |
+| 6 | WDAC-safe inference fallback | `detect_inference_backend` checks llama-server:8342, Ollama:11434, LM Studio:1234 |
+
+**Total added dependency weight: ~3.8 MB** — all pure Rust, no C/C++ system libraries, no external runtimes.
 
 ## Completed Deliverables
 

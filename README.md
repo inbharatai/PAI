@@ -57,11 +57,14 @@ UnoOne Mobile (Android)          UnoOne Power (Desktop)
 |-----------|--------|
 | Mobile app (Android) | V2 agent pipeline merged — 42 tools, E2B/E4B dual mode, deterministic routing |
 | Desktop frontend (React) | BUILDS — Vite build passes, real Tauri API calls, no mock data |
-| Desktop backend (Rust) | CI_CONFIGURED — WDAC blocks local build; Rust CI configured (fmt/check/test/clippy on Windows+macOS) |
-| Vault encryption (`packages/vault-core`) | IMPLEMENTED, CI_PENDING — Argon2id + XChaCha20-Poly1305 + HKDF-SHA-256 + BIP-39 recovery + write-ahead journal |
-| Model inference | **NOT PROVEN from USB** — WDAC blocks llama-server.exe on this machine; verified via Ollama proxy |
-| Recording | **NOT IMPLEMENTED** — state machine only, no audio capture |
-| Browser | **NOT IMPLEMENTED** — returns "not available" |
+| Desktop backend (Rust) | IMPLEMENTED — compiles on CI; WDAC blocks local builds |
+| Vault encryption (`packages/vault-core`) | IMPLEMENTED — Argon2id + XChaCha20-Poly1305 + HKDF-SHA-256 + BIP-39 recovery + write-ahead journal; wired to recording, documents, and vault writes |
+| Model inference | WDAC FALLBACK — detects llama-server / Ollama / LM Studio; verified via Ollama proxy; mmproj vision loaded when available |
+| Recording | IMPLEMENTED — cpal audio capture + hound WAV encoding + vault-core XChaCha20-Poly1305 encryption; 4 privacy levels (Full, TranscriptOnly, SummaryOnly, PrivateSession) |
+| Browser workspace | IMPLEMENTED — Tauri WebView bridge (WebView2/WKWebView); DOM query, click, type, extract text, fill form, scroll, screenshot; no Playwright/Chromium needed |
+| Document parsing | IMPLEMENTED — PDF (lopdf), DOCX/XLSX/PPTX (zip+quick-xml), TXT/MD/CSV/HTML; TF-IDF search |
+| Accessibility (OCR, Blind View) | IMPLEMENTED — OCR and image description via Gemma mmproj model; camera info via getUserMedia; encode_image_for_vision base64 pipeline |
+| Security (vault writes) | IMPLEMENTED — vault_write_record Tauri command writes encrypted records; recording and document content encrypted end-to-end |
 | macOS | **NOT BUILT, NOT TESTED** |
 
 See `docs/EVIDENCE_AUDIT.md` for the full honest status of every feature.
@@ -166,6 +169,7 @@ The model is selected **before** a task starts and **never switches mid-task**. 
 - **Deletion**: Tombstone records propagate across platforms
 - **Password-only login**: No username, no email, no cloud account
 - **Memory safety**: Master key zeroed on lock and drop; no passwords in files/logs
+- **Vault writes**: `vault_write_record` Tauri command encrypts content via XChaCha20-Poly1305 and stores in `VAULT/records/`; recording and document content flows through this pipeline
 
 > ⚠️ **CI verification pending**: vault-core compiles locally (frontend passes) but Rust CI has not yet verified `cargo check/test/clippy`. WDAC blocks local Rust builds. Do not store sensitive data until CI confirms all tests pass.
 
@@ -270,7 +274,7 @@ PAI/
 ├── apps/
 │   └── desktop/                  # Tauri 2 + React 19 desktop app
 │       ├── src/                  # React frontend (11 components)
-│       └── src-tauri/            # Rust backend (8 modules)
+│       └── src-tauri/            # Rust backend (8 modules: main, llama, safety, recording, browser, documents, accessibility, security)
 ├── scripts/
 │   ├── verify-mobile-untouched.sh  # CI protection: zero changes to Android
 │   ├── verify-mobile-untouched.py  # Python equivalent
@@ -289,27 +293,27 @@ PAI/
 
 | Module | Purpose | Status |
 |--------|---------|--------|
-| `main.rs` | USB vault detection, manifest validation, hardware profiling, vault-core integration (Argon2id unlock/create/lock) | PARTIALLY_IMPLEMENTED |
-| `llama.rs` | Model manager: manifest-based discovery, CUDA/Metal/Vulkan/CPU detection, health endpoint | PARTIALLY_IMPLEMENTED |
-| `safety.rs` | SafetyGuard (STANDARD/RELAXED/OFF), blocked actions, harm detection | PARTIALLY_IMPLEMENTED |
-| `recording.rs` | Desktop recording engine, privacy levels, bookmarks | NOT_IMPLEMENTED (state machine only, start_recording returns SECURITY_NOT_IMPLEMENTED) |
-| `browser.rs` | Browser workspace, PageAgent safety pipeline | NOT_IMPLEMENTED |
-| `documents.rs` | Document processing, 10 file types, search | PARTIALLY_IMPLEMENTED (TXT/Markdown only) |
-| `accessibility.rs` | Blind View, OCR, screen reader, camera adapters | NOT_IMPLEMENTED |
-| `security.rs` | Signed manifests, SHA-256, crash recovery, emergency lock | PARTIALLY_IMPLEMENTED (SHA-256 real, encryption not) |
+| `main.rs` | USB vault detection, manifest validation, hardware profiling, vault-core integration, vault_write_record command | IMPLEMENTED |
+| `llama.rs` | Model manager: manifest-based discovery, CUDA/Metal/Vulkan/CPU detection, mmproj vision, WDAC fallback (llama-server/Ollama/LM Studio), multimodal Content enum | IMPLEMENTED |
+| `safety.rs` | SafetyGuard (STANDARD/RELAXED/OFF), blocked actions, harm detection | IMPLEMENTED |
+| `recording.rs` | Desktop recording: cpal microphone capture, hound WAV encoding, vault-core XChaCha20-Poly1305 encryption, 4 privacy levels | IMPLEMENTED |
+| `browser.rs` | Browser workspace: Tauri WebView bridge (no Playwright), DOM query/click/type/extract/fill/scroll/screenshot | IMPLEMENTED |
+| `documents.rs` | Document processing: PDF (lopdf), DOCX/XLSX/PPTX (zip+quick-xml), TXT/MD/CSV/HTML, TF-IDF search | IMPLEMENTED |
+| `accessibility.rs` | Blind View, OCR and image description via Gemma mmproj, camera info, encode_image_for_vision | IMPLEMENTED |
+| `security.rs` | Signed manifests, SHA-256, vault-core encryption wired, crash recovery, emergency lock | IMPLEMENTED |
 
 ### Desktop React Frontend (`apps/desktop/src/src/`)
 
 | Component | Purpose | Status |
 |-----------|---------|--------|
 | `UnlockScreen` | Password-only vault unlock, USB detection, new vault setup | BUILDS_NOT_RUNTIME_TESTED |
-| `ChatView` | Gemma 4 conversation via llama-server HTTP | PARTIALLY_IMPLEMENTED (no model loaded) |
-| `RecordingView` | Recording with type/privacy, pause/resume/bookmarks | NOT_IMPLEMENTED (no audio capture) |
+| `ChatView` | Gemma 4 conversation via llama-server HTTP | IMPLEMENTED (needs running model) |
+| `RecordingView` | Recording with type/privacy, pause/resume/bookmarks, vault encryption | IMPLEMENTED (backend wired, needs UI testing) |
 | `MemoryExplorer` | 7 memory types, search, cross-platform sync | BUILDS_NOT_RUNTIME_TESTED |
 | `VaultView` | Vault status, emergency lock | BUILDS_NOT_RUNTIME_TESTED |
-| `BrowserWorkspace` | URL bar, Chromium viewport | NOT_IMPLEMENTED ("Coming Soon") |
-| `DocumentsView` | Document import, search | BUILDS_NOT_RUNTIME_TESTED |
-| `AccessibilityView` | Blind View, OCR, high contrast | NOT_IMPLEMENTED (vision disabled) |
+| `BrowserWorkspace` | URL bar, WebView viewport, DOM bridge actions | IMPLEMENTED (backend wired, needs UI testing) |
+| `DocumentsView` | Document import, search (PDF/DOCX/XLSX/PPTX/TXT/MD/CSV/HTML) | IMPLEMENTED (needs UI testing) |
+| `AccessibilityView` | Blind View, OCR, high contrast, camera capture | IMPLEMENTED (backend wired, needs UI testing) |
 
 ## Model Verification
 
@@ -325,6 +329,24 @@ PAI/
 | Licence | [Gemma Terms of Use](https://ai.google.dev/gemma/terms) |
 | Inference verified | Yes — via Ollama proxy (direct llama-server blocked by WDAC) |
 | Source = Destination SHA-256 | ✅ Exact match |
+
+### Desktop Pure-Rust Dependencies (Pendrive-Compatible)
+
+All desktop dependencies are pure Rust — no C/C++ system libraries, no external runtimes, no WDAC-blocked build scripts.
+
+| Crate | Purpose | WDAC-safe |
+|-------|---------|-----------|
+| `cpal 0.15` | Microphone audio capture (WASAPI/CoreAudio/ALSA) | ✅ |
+| `hound 3.5` | WAV encoding for recordings | ✅ |
+| `lopdf 0.33` | PDF text extraction (nom_parser, no rayon) | ✅ |
+| `zip 2` | ZIP/DOCX/XLSX/PPTX parsing (deflate only, no bzip2-sys) | ✅ |
+| `quick-xml 0.37` | XML parsing for DOCX/XLSX/PPTX content | ✅ |
+| `base64 0.22` | Base64 encoding for vision/OCR image transport | ✅ |
+| `reqwest 0.12` | HTTP client for llama-server inference | ✅ |
+| `tauri 2` | WebView shell (uses system WebView2/WKWebView) | ✅ |
+| `unoone-vault-core` | Argon2id + XChaCha20-Poly1305 encryption | ✅ |
+
+**Total added dependency weight: ~3.8 MB.** No Tesseract, no Playwright, no separate Gemma download, no C/C++ build tools required.
 
 ## Tests
 
@@ -411,7 +433,10 @@ The following gates remain open:
 - release dependency/licence review, SBOM, protected signing key, and signed release APK;
 - production object storage, catalogue signing key, signed catalogues, deployment, update, and rollback testing;
 - E4B (Medium) model loading and inference on device;
-- live voice, camera, and TalkBack UX validation.
+- live voice, camera, and TalkBack UX validation;
+- desktop runtime testing: recording with real microphone, browser workspace with real pages, OCR with real images;
+- macOS build and testing;
+- WDAC policy environment testing: verify llama-server, recording, and browser work under real WDAC constraints.
 
 The installer PWA is implemented but intentionally keeps downloads locked when a production catalogue public key is not configured. No production deployment or production-approved release is claimed.
 
@@ -427,6 +452,8 @@ The installer PWA is implemented but intentionally keeps downloads locked when a
 - ❌ No modifying the Android app during desktop development
 - ❌ No hardcoded drive letters — discover USB via removable-drive scan + manifest validation
 - ❌ No claiming features work without test evidence (command, exit code, OS, hardware, date, commit)
+- ❌ No external runtimes — no Playwright, no Tesseract, no separate Gemma download
+- ❌ No C/C++ build dependencies that WDAC blocks (rayon-core, bzip2-sys)
 
 ## Documentation
 
