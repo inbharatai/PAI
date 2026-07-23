@@ -614,7 +614,7 @@ impl ModelManager {
                         .and_then(|s| serde_json::from_str(s).ok())
                         .unwrap_or(serde_json::Value::Object(Default::default()));
                     Some(ToolCallResult { id, name, arguments })
-                }).collect::<Vec<_>>())
+                }).collect::<Vec<_>>()
             });
 
         let finish_reason = choice
