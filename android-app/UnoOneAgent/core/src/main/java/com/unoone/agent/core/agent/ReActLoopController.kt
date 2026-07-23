@@ -48,7 +48,8 @@ object ReActLoopController {
      */
     val observationTools: Set<String> = setOf(
         "search_notes", "summarize_text", "web_search", "read_screen", "ocr_screen",
-        "detect_objects", "voice_recording", "check_calendar", "check_calendar_conflict"
+        "detect_objects", "voice_recording", "check_calendar", "check_calendar_conflict",
+        "resolve_contact"
     )
 
     /** True iff the loop should engage after the model's first proposed [firstTool] call. */

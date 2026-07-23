@@ -190,6 +190,33 @@ export interface VoiceStatus {
   language: string;
 }
 
+export interface AppSettings {
+  security_level: string;
+  auto_lock_minutes: number;
+  model_name: string;
+  temperature: number;
+  max_tokens: number;
+  context_size: number;
+  gpu_layers: number;
+}
+
+export interface AccessibilitySettingsInput {
+  high_contrast: boolean;
+  reduced_motion: boolean;
+  font_scale: number;
+  stt_language: string;
+  tts_language: string;
+}
+
+export interface VaultDomainCounts {
+  memories: number;
+  chats: number;
+  recordings: number;
+  documents: number;
+  settings: number;
+  audit: number;
+}
+
 // Tauri invoke — works in Tauri runtime only
 async function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   const { invoke: tauriInvoke } = await import('@tauri-apps/api/core');
@@ -257,4 +284,12 @@ export const tauriApi = {
     invoke<{ text: string; language: string; confidence: number; status: string }>('transcribe_audio', { audio_path: audioPath, vault_root: vaultRoot }),
   synthesizeSpeech: (text: string, vaultRoot: string) =>
     invoke<{ audio_path: string | null; duration_seconds: number | null; sample_rate: number; status: string; error: string | null }>('synthesize_speech', { text, vault_root: vaultRoot }),
+
+  // Settings and configuration
+  getVersion: () => invoke<string>('get_version'),
+  setSettings: (settings: AppSettings, vaultRoot: string) => invoke<string>('set_settings', { settings, vault_root: vaultRoot }),
+  getSettings: (vaultRoot: string) => invoke<AppSettings>('get_settings', { vault_root: vaultRoot }),
+  setAccessibilityStatus: (settings: AccessibilitySettingsInput, vaultRoot: string) =>
+    invoke<string>('set_accessibility_status', { settings, vault_root: vaultRoot }),
+  getVaultDomainCounts: (vaultRoot: string) => invoke<VaultDomainCounts>('get_vault_domain_counts', { vault_root: vaultRoot }),
 };

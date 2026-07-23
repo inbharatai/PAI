@@ -369,8 +369,9 @@ pub struct SafetyGuardState {
 }
 
 #[tauri::command]
-pub fn get_security_level(state: tauri::State<'_, SafetyGuardState>) -> String {
-    state.guard.lock().unwrap().get_security_level().to_string()
+pub fn get_security_level(state: tauri::State<'_, SafetyGuardState>) -> Result<String, String> {
+    let guard = state.guard.lock().map_err(|e| format!("State lock error: {}", e))?;
+    Ok(guard.get_security_level().to_string())
 }
 
 /// D6: Set security level — persists to VAULT/config/security.json and
@@ -392,12 +393,13 @@ pub fn set_security_level(level: String, state: tauri::State<'_, SafetyGuardStat
 }
 
 #[tauri::command]
-pub fn get_audit_log(state: tauri::State<'_, SafetyGuardState>) -> Vec<SafetyAuditEntry> {
-    state.guard.lock().unwrap().get_audit_log().to_vec()
+pub fn get_audit_log(state: tauri::State<'_, SafetyGuardState>) -> Result<Vec<SafetyAuditEntry>, String> {
+    let guard = state.guard.lock().map_err(|e| format!("State lock error: {}", e))?;
+    Ok(guard.get_audit_log().to_vec())
 }
 
 #[tauri::command]
-pub fn review_tool_action(action: ToolAction, state: tauri::State<'_, SafetyGuardState>) -> SafetyVerdict {
-    let mut guard = state.guard.lock().unwrap();
-    guard.review_action(&action)
+pub fn review_tool_action(action: ToolAction, state: tauri::State<'_, SafetyGuardState>) -> Result<SafetyVerdict, String> {
+    let mut guard = state.guard.lock().map_err(|e| format!("State lock error: {}", e))?;
+    Ok(guard.review_action(&action))
 }

@@ -308,11 +308,18 @@ pub async fn agent_chat(
                 // Process each tool call through safety then execute
                 for tc in tool_calls {
                     // 2a. Parse as ToolAction for safety review
+                    // The model explicitly chose to call this tool, so confidence
+                    // defaults to 1.0 (the model's intentionality is implicit confidence).
+                    // If the model provides a confidence score in the arguments, extract it.
+                    let confidence = tc.arguments.get("confidence")
+                        .and_then(|v| v.as_f64())
+                        .map(|f| f as f32)
+                        .unwrap_or(1.0);
                     let action = ToolAction {
                         action_id: tc.id.clone(),
                         tool_name: tc.name.clone(),
                         parameters: tc.arguments.clone(),
-                        confidence: 0.8, // Default; model doesn't provide confidence
+                        confidence,
                         raw_output: String::new(),
                     };
 

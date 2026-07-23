@@ -103,6 +103,7 @@ object ActionVerifier {
         "send_prepared_whatsapp",
         "create_calendar_event",
         "open_calendar",
+        "open_calendar_insert",  // legacy calendar tool, still dispatchable
         "open_chrome",
         "open_url",
         "draft_email",

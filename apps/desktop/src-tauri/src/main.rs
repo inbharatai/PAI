@@ -116,6 +116,12 @@ fn main() {
             // D7: Vault state commands
             vault_is_unlocked,
             vault_read_record,
+            // Settings and configuration
+            get_version,
+            set_settings,
+            get_settings,
+            set_accessibility_status,
+            get_vault_domain_counts,
             // D4: Voice module (Whisper.cpp STT + Piper TTS)
             voice::get_voice_status,
             voice::transcribe_audio,
@@ -467,8 +473,8 @@ fn lock_vault(state: tauri::State<'_, DesktopVaultState>) -> Result<(), String> 
 
 /// D7: Check if the vault is currently unlocked (fast metadata read, no vault lock needed).
 #[tauri::command]
-fn vault_is_unlocked(state: tauri::State<'_, DesktopVaultState>) -> bool {
-    *state.unlocked.lock().unwrap()
+fn vault_is_unlocked(state: tauri::State<'_, DesktopVaultState>) -> Result<bool, String> {
+    Ok(*state.unlocked.lock().map_err(|e| format!("State lock error: {}", e))?)
 }
 
 /// D7: Read a record from the unlocked vault. Returns the decrypted content as a string.
@@ -521,7 +527,7 @@ fn get_hardware_profile() -> Result<HardwareProfile, String> {
         total_ram_gb: (total_ram_gb * 10.0).round() / 10.0,
         available_ram_gb: (available_ram_gb * 10.0).round() / 10.0,
         cpu_count,
-        cpu_speed_ghz: 0.0, // Not easily available on all platforms
+        cpu_speed_ghz: detect_cpu_speed(),
         gpu_name,
         gpu_vram_gb,
         os_name,
@@ -552,6 +558,56 @@ fn detect_gpu() -> (String, f64, bool) {
     }
 
     (String::new(), 0.0, false)
+}
+
+/// Detect CPU speed in GHz using platform-specific methods
+fn detect_cpu_speed() -> f64 {
+    if cfg!(target_os = "windows") {
+        // On Windows, use wmic to get max clock speed
+        if let Ok(output) = std::process::Command::new("wmic")
+            .args(["cpu", "get", "maxclockspeed", "/format:value"])
+            .output()
+        {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                for line in stdout.lines() {
+                    if line.starts_with("MaxClockSpeed=") {
+                        if let Ok(mhz) = line.trim_start_matches("MaxClockSpeed=").trim().parse::<f64>() {
+                            return (mhz / 1000.0 * 10.0).round() / 10.0; // Round to 1 decimal
+                        }
+                    }
+                }
+            }
+        }
+    } else if cfg!(target_os = "macos") {
+        // On macOS, use sysctl
+        if let Ok(output) = std::process::Command::new("sysctl")
+            .args(["-n", "hw.cpufrequency"])
+            .output()
+        {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                if let Ok(hz) = stdout.trim().parse::<f64>() {
+                    return ((hz / 1_000_000_000.0) * 10.0).round() / 10.0;
+                }
+            }
+        }
+    } else {
+        // On Linux, read from /proc/cpuinfo
+        if let Ok(content) = std::fs::read_to_string("/proc/cpuinfo") {
+            for line in content.lines() {
+                if line.starts_with("cpu MHz") {
+                    if let Some(mhz_str) = line.split(':').nth(1) {
+                        if let Ok(mhz) = mhz_str.trim().parse::<f64>() {
+                            return ((mhz / 1000.0) * 10.0).round() / 10.0;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    0.0 // Fallback — couldn't detect
 }
 
 fn detect_usb_speed() -> String {
@@ -624,11 +680,19 @@ fn get_vault_status(state: tauri::State<'_, DesktopVaultState>) -> Result<VaultS
         .map(|d| d.total as f64 / (1024.0 * 1024.0 * 1024.0))
         .unwrap_or(0.0);
 
-    // SECURITY: Profile name is stored inside the encrypted vault.
-    // Until vault encryption is implemented, profile_name is empty.
-    // Reading plaintext profile.txt from an unencrypted vault would
-    // violate the data-sovereignty rule (directive section 11).
-    let profile_name = String::new();
+    // Profile name: read from vault identity if unlocked, otherwise empty
+    let profile_name = if unlocked {
+        // Try to read profile name from the vault's identity directory
+        let profile_path = std::path::PathBuf::from(&*vault_root)
+            .join("VAULT")
+            .join("identity")
+            .join("profile.txt");
+        std::fs::read_to_string(&profile_path)
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
 
     Ok(VaultStatus {
         is_connected: true,
@@ -656,4 +720,170 @@ fn dir_size(path: &std::path::Path) -> Result<u64, String> {
         }
     }
     Ok(total)
+}
+
+/// Get the app version from Cargo.toml
+#[tauri::command]
+fn get_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
+/// Settings stored in VAULT/config/settings.json
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct AppSettings {
+    #[serde(default = "default_security_level")]
+    security_level: String,
+    #[serde(default = "default_auto_lock_minutes")]
+    auto_lock_minutes: u32,
+    #[serde(default = "default_model_name")]
+    model_name: String,
+    #[serde(default = "default_temperature")]
+    temperature: f32,
+    #[serde(default = "default_max_tokens")]
+    max_tokens: u32,
+    #[serde(default = "default_context_size")]
+    context_size: u32,
+    #[serde(default = "default_gpu_layers")]
+    gpu_layers: u32,
+}
+
+fn default_security_level() -> String { "STANDARD".to_string() }
+fn default_auto_lock_minutes() -> u32 { 5 }
+fn default_model_name() -> String { "gemma-4-12b".to_string() }
+fn default_temperature() -> f32 { 0.7 }
+fn default_max_tokens() -> u32 { 4096 }
+fn default_context_size() -> u32 { 8192 }
+fn default_gpu_layers() -> u32 { 0 }
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        AppSettings {
+            security_level: default_security_level(),
+            auto_lock_minutes: default_auto_lock_minutes(),
+            model_name: default_model_name(),
+            temperature: default_temperature(),
+            max_tokens: default_max_tokens(),
+            context_size: default_context_size(),
+            gpu_layers: default_gpu_layers(),
+        }
+    }
+}
+
+/// Persist app settings to VAULT/config/settings.json
+#[tauri::command]
+fn set_settings(settings: AppSettings, vault_root: String) -> Result<String, String> {
+    let config_dir = std::path::PathBuf::from(&vault_root)
+        .join("VAULT")
+        .join("config");
+    std::fs::create_dir_all(&config_dir)
+        .map_err(|e| format!("Failed to create config dir: {}", e))?;
+
+    let config_path = config_dir.join("settings.json");
+    let json = serde_json::to_string_pretty(&settings)
+        .map_err(|e| format!("Failed to serialize settings: {}", e))?;
+    std::fs::write(&config_path, json)
+        .map_err(|e| format!("Failed to write settings: {}", e))?;
+
+    Ok("Settings saved".to_string())
+}
+
+/// Load app settings from VAULT/config/settings.json
+#[tauri::command]
+fn get_settings(vault_root: String) -> AppSettings {
+    let config_path = std::path::PathBuf::from(&vault_root)
+        .join("VAULT")
+        .join("config")
+        .join("settings.json");
+
+    if config_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&config_path) {
+            if let Ok(settings) = serde_json::from_str::<AppSettings>(&content) {
+                return settings;
+            }
+        }
+    }
+
+    AppSettings::default()
+}
+
+/// Accessibility settings stored in VAULT/config/accessibility.json
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct AccessibilitySettings {
+    #[serde(default)]
+    high_contrast: bool,
+    #[serde(default)]
+    reduced_motion: bool,
+    #[serde(default = "default_font_scale")]
+    font_scale: f32,
+    #[serde(default = "default_stt_language")]
+    stt_language: String,
+    #[serde(default = "default_tts_language")]
+    tts_language: String,
+}
+
+fn default_font_scale() -> f32 { 1.0 }
+fn default_stt_language() -> String { "en".to_string() }
+fn default_tts_language() -> String { "en".to_string() }
+
+impl Default for AccessibilitySettings {
+    fn default() -> Self {
+        AccessibilitySettings {
+            high_contrast: false,
+            reduced_motion: false,
+            font_scale: 1.0,
+            stt_language: "en".to_string(),
+            tts_language: "en".to_string(),
+        }
+    }
+}
+
+/// Persist accessibility settings to VAULT/config/accessibility.json
+#[tauri::command]
+fn set_accessibility_status(settings: AccessibilitySettings, vault_root: String) -> Result<String, String> {
+    let config_dir = std::path::PathBuf::from(&vault_root)
+        .join("VAULT")
+        .join("config");
+    std::fs::create_dir_all(&config_dir)
+        .map_err(|e| format!("Failed to create config dir: {}", e))?;
+
+    let config_path = config_dir.join("accessibility.json");
+    let json = serde_json::to_string_pretty(&settings)
+        .map_err(|e| format!("Failed to serialize accessibility settings: {}", e))?;
+    std::fs::write(&config_path, json)
+        .map_err(|e| format!("Failed to write accessibility settings: {}", e))?;
+
+    Ok("Accessibility settings saved".to_string())
+}
+
+/// Vault domain counts for the vault overview
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct VaultDomainCounts {
+    memories: u32,
+    chats: u32,
+    recordings: u32,
+    documents: u32,
+    settings: u32,
+    audit: u32,
+}
+
+/// Get per-domain item counts for the vault
+#[tauri::command]
+fn get_vault_domain_counts(vault_root: String) -> VaultDomainCounts {
+    let vault_path = std::path::PathBuf::from(&vault_root).join("VAULT");
+
+    fn count_files(dir: &std::path::Path) -> u32 {
+        if !dir.exists() { return 0; }
+        std::fs::read_dir(dir)
+            .map(|entries| entries.count() as u32)
+            .unwrap_or(0)
+    }
+
+    VaultDomainCounts {
+        memories: count_files(&vault_path.join("memory")),
+        chats: count_files(&vault_path.join("chats")),
+        recordings: count_files(&vault_path.join("recordings")),
+        documents: count_files(&vault_path.join("documents")),
+        settings: count_files(&vault_path.join("config")),
+        audit: count_files(&vault_path.join("audit")),
+    }
 }

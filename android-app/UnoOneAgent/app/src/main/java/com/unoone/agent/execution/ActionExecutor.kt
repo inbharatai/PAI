@@ -299,19 +299,39 @@ class ActionExecutor(
 
                 "check_calendar_conflict" -> {
                     // Check for calendar conflicts at a proposed time
-                    val now = System.currentTimeMillis()
-                    val eventsResult = calendarControl.getEvents(now, now + 7 * 86_400_000L) // Check next 7 days
+                    // Parse the date/time arguments to narrow the query window
+                    val dateStr = toolCall.args["date"]?.jsonPrimitive?.content
+                    val startTimeStr = toolCall.args["start_time"]?.jsonPrimitive?.content
+                    val endTimeStr = toolCall.args["end_time"]?.jsonPrimitive?.content
+
+                    // Determine the proposed time window using parseTimeMs (already available in this class)
+                    val proposedStart = parseTimeMs(startTimeStr)
+                        ?: parseTimeMs(dateStr)
+                        ?: System.currentTimeMillis()
+                    val proposedEnd = parseTimeMs(endTimeStr)
+                        ?: (proposedStart + 3_600_000L) // default 1-hour slot
+
+                    // Query calendar for the proposed window (with 30min buffer on each side)
+                    val bufferMs = 1_800_000L // 30 minutes
+                    val eventsResult = calendarControl.getEvents(
+                        proposedStart - bufferMs,
+                        proposedEnd + bufferMs
+                    )
                     if (eventsResult is Result.Success) {
                         val events = eventsResult.data
-                        val date = toolCall.args["date"]?.jsonPrimitive?.content ?: ""
-                        val startTime = toolCall.args["start_time"]?.jsonPrimitive?.content ?: ""
-                        if (events.isEmpty()) {
-                            Result.Success("No calendar conflicts found. The schedule is clear.")
+                        // Filter for events that actually overlap with the proposed time
+                        val conflicts = events.filter { event ->
+                            event.startTime < proposedEnd && event.endTime > proposedStart
+                        }
+                        if (conflicts.isEmpty()) {
+                            Result.Success("No calendar conflicts found for the requested time.")
                         } else {
-                            val eventList = events.take(5).joinToString("; ") {
-                                "${it.title} at ${it.startTime}"
+                            val conflictList = conflicts.take(5).joinToString("; ") {
+                                val startStr = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
+                                    .format(java.util.Date(it.startTime))
+                                "${it.title} at $startStr"
                             }
-                            Result.Success("Found ${events.size} upcoming event(s). Nearest: $eventList")
+                            Result.Success("Found ${conflicts.size} conflict(s): $conflictList")
                         }
                     } else Result.Error("Calendar access failed.")
                 }

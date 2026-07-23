@@ -111,21 +111,22 @@ impl SecurityManager {
     }
 
     /// D8: Compute HMAC-SHA-256 using the manifest signing key.
-    fn compute_hmac(&self, data: &[u8], key: &[u8]) -> String {
+    /// Returns Result instead of panicking on invalid key length.
+    fn compute_hmac(&self, data: &[u8], key: &[u8]) -> Result<String, String> {
         type HmacSha256 = Hmac<Sha256>;
 
         let mut mac = <HmacSha256 as Mac>::new_from_slice(key)
-            .expect("HMAC key length is valid");
+            .map_err(|e| format!("HMAC key error: {}", e))?;
         mac.update(data);
         let result = mac.finalize();
         let code_bytes = result.into_bytes();
-        format!("{:x}", code_bytes)
+        Ok(format!("{:x}", code_bytes))
     }
 
     /// D8: Get or create the persistent HMAC signing key.
     /// The key is stored at VAULT/config/manifest.key as hex-encoded bytes.
-    /// If the file doesn't exist, a random 32-byte key is derived from the
-    /// vault ID and stored for subsequent verification.
+    /// If the file doesn't exist, a cryptographically random 32-byte key is
+    /// generated using OsRng and stored for subsequent verification.
     fn get_signing_key(&self) -> Result<[u8; 32], String> {
         let key_path = PathBuf::from(&self.vault_root)
             .join("VAULT")
@@ -156,12 +157,11 @@ impl SecurityManager {
             key.copy_from_slice(&key_bytes);
             Ok(key)
         } else {
-            // Generate a new 32-byte key derived from vault ID + timestamp
-            let vault_id = self.read_vault_id().unwrap_or_default();
-            let seed = format!("{}:{}", vault_id, chrono::Utc::now().to_rfc3339());
-            let hash = Sha256::digest(seed.as_bytes());
+            // Generate a cryptographically random 32-byte key using OsRng.
+            // This replaces the old deterministic derivation from vault_id + timestamp,
+            // which was predictable and defeated the purpose of HMAC signing.
             let mut key = [0u8; 32];
-            key.copy_from_slice(&hash);
+            rand::rngs::OsRng.fill_bytes(&mut key);
 
             // Save the key as hex
             let hex_key = hex::encode(key);
@@ -188,7 +188,7 @@ impl SecurityManager {
         for entry in entries.iter_mut() {
             if !entry.sha256.is_empty() {
                 let entry_data = format!("{}:{}:{}", entry.path, entry.sha256, entry.size_bytes);
-                entry.entry_hmac = self.compute_hmac(entry_data.as_bytes(), &signing_key);
+                entry.entry_hmac = self.compute_hmac(entry_data.as_bytes(), &signing_key)?;
             }
         }
 
@@ -198,7 +198,7 @@ impl SecurityManager {
         let sha256 = self.compute_sha256(manifest_data.as_bytes());
 
         // D8: Compute HMAC signature over the manifest hash
-        let manifest_hmac = self.compute_hmac(sha256.as_bytes(), &signing_key);
+        let manifest_hmac = self.compute_hmac(sha256.as_bytes(), &signing_key)?;
 
         Ok(VaultManifest {
             vault_id: self.read_vault_id()?,
@@ -220,7 +220,7 @@ impl SecurityManager {
 
         // D8: Verify the manifest HMAC signature first
         let signing_key = self.get_signing_key()?;
-        let expected_hmac = self.compute_hmac(manifest.manifest_sha256.as_bytes(), &signing_key);
+        let expected_hmac = self.compute_hmac(manifest.manifest_sha256.as_bytes(), &signing_key)?;
 
         let hmac_valid = expected_hmac == manifest.manifest_hmac;
         if !hmac_valid {
@@ -259,7 +259,7 @@ impl SecurityManager {
 
             // D8: Verify entry HMAC — path + sha256 + size_bytes must match
             let entry_data = format!("{}:{}:{}", entry.path, entry.sha256, entry.size_bytes);
-            let expected_entry_hmac = self.compute_hmac(entry_data.as_bytes(), &signing_key);
+            let expected_entry_hmac = self.compute_hmac(entry_data.as_bytes(), &signing_key)?;
             if entry.entry_hmac != expected_entry_hmac {
                 failed += 1;
                 errors.push(format!(
@@ -429,13 +429,47 @@ impl SecurityManager {
 #[tauri::command]
 pub fn generate_manifest(vault_root: String) -> Result<VaultManifest, String> {
     let manager = SecurityManager::new(&vault_root);
-    manager.generate_manifest()
+    let manifest = manager.generate_manifest()?;
+
+    // Persist the manifest so verify_manifest can verify against this baseline.
+    // Without saving, verify_manifest would have nothing to compare against.
+    let config_dir = PathBuf::from(&vault_root)
+        .join("VAULT")
+        .join("config");
+    std::fs::create_dir_all(&config_dir)
+        .map_err(|e| format!("Failed to create config dir: {}", e))?;
+
+    let manifest_path = config_dir.join("manifest.json");
+    let manifest_json = serde_json::to_string_pretty(&manifest)
+        .map_err(|e| format!("Failed to serialize manifest: {}", e))?;
+    std::fs::write(&manifest_path, manifest_json)
+        .map_err(|e| format!("Failed to write manifest: {}", e))?;
+
+    Ok(manifest)
 }
 
 #[tauri::command]
 pub fn verify_manifest(vault_root: String) -> Result<SecurityVerificationResult, String> {
     let manager = SecurityManager::new(&vault_root);
-    let manifest = manager.generate_manifest()?;
+
+    // Load the previously-saved manifest — verify against the stored version,
+    // NOT a freshly-generated one. Verifying against a fresh manifest would
+    // make tampering undetectable because we'd be comparing current files
+    // against current files (not against the known-good baseline).
+    let manifest_path = PathBuf::from(&vault_root)
+        .join("VAULT")
+        .join("config")
+        .join("manifest.json");
+
+    if !manifest_path.exists() {
+        return Err("No manifest found. Run generate_manifest first to create a baseline.".to_string());
+    }
+
+    let manifest_content = std::fs::read_to_string(&manifest_path)
+        .map_err(|e| format!("Failed to read manifest: {}", e))?;
+    let manifest: VaultManifest = serde_json::from_str(&manifest_content)
+        .map_err(|e| format!("Failed to parse manifest: {}", e))?;
+
     manager.verify_manifest(&manifest)
 }
 

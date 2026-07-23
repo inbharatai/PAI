@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { tauriApi } from '../lib/tauri';
 
 interface ChatMessage {
   id: string;
