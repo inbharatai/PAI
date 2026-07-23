@@ -16,7 +16,11 @@ const VAULT_DOMAINS: VaultDomain[] = [
   { name: 'Audit', icon: '📋', path: 'audit' },
 ];
 
-export function VaultView() {
+interface VaultViewProps {
+  onLock?: () => void;
+}
+
+export function VaultView({ onLock }: VaultViewProps) {
   const [vaultStatus, setVaultStatus] = useState<VaultStatus | null>(null);
   const [domainCounts, setDomainCounts] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
@@ -36,16 +40,15 @@ export function VaultView() {
     try {
       const vaultInfo = await tauriApi.detectVault();
       if (vaultInfo.detected) {
-        const counts: Record<string, number> = {};
-        for (const domain of VAULT_DOMAINS) {
-          try {
-            const docs = await tauriApi.listDocuments(vaultInfo.vault_root);
-            counts[domain.path] = docs.length;
-          } catch {
-            counts[domain.path] = 0;
-          }
-        }
-        setDomainCounts(counts);
+        const counts = await tauriApi.getVaultDomainCounts(vaultInfo.vault_root);
+        setDomainCounts({
+          memory: counts.memories,
+          chats: counts.chats,
+          recordings: counts.recordings,
+          documents: counts.documents,
+          settings: counts.settings,
+          audit: counts.audit,
+        });
       }
     } catch {
       // Vault not connected — counts stay at 0
@@ -84,6 +87,7 @@ export function VaultView() {
           <button className="btn btn-danger btn-sm" onClick={async () => {
             try {
               await tauriApi.lockVault();
+              onLock?.();
             } catch (e) {
               setError(`Emergency lock failed: ${e instanceof Error ? e.message : String(e)}`);
             }

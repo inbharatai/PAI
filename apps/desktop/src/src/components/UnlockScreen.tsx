@@ -15,6 +15,7 @@ export function UnlockScreen({ onUnlock }: UnlockScreenProps) {
   const [loading, setLoading] = useState(false);
   const [setupStep, setSetupStep] = useState(0);
   const [recoveryKey, setRecoveryKey] = useState('');
+  const [newVaultId, setNewVaultId] = useState('');
 
   const handleDetect = useCallback(async () => {
     setLoading(true);
@@ -74,6 +75,7 @@ export function UnlockScreen({ onUnlock }: UnlockScreenProps) {
       const result = await tauriApi.setupVault(password, profileName || null, vaultInfo?.vault_root || '');
       if (result.success) {
         setRecoveryKey(result.recovery_key);
+        setNewVaultId(result.vault_id);
         setSetupStep(2);
       } else {
         setError(result.error || 'Setup failed');
@@ -83,7 +85,7 @@ export function UnlockScreen({ onUnlock }: UnlockScreenProps) {
     } finally {
       setLoading(false);
     }
-  }, [password, confirmPassword, profileName]);
+  }, [password, confirmPassword, profileName, vaultInfo]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
@@ -223,8 +225,11 @@ export function UnlockScreen({ onUnlock }: UnlockScreenProps) {
                 Write down this recovery key and store it safely. You will need it if you forget your password.
               </p>
               <div className="recovery-key-box">{recoveryKey}</div>
+              <button className="btn btn-secondary" style={{ marginTop: '8px', width: '100%' }} onClick={() => navigator.clipboard.writeText(recoveryKey)}>
+                Copy to Clipboard
+              </button>
               <div className="unlock-actions">
-                <button className="btn btn-primary" onClick={() => onUnlock('new-vault')}>
+                <button className="btn btn-primary" onClick={() => onUnlock(newVaultId)}>
                   I've Saved My Recovery Key
                 </button>
               </div>

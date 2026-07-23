@@ -16,6 +16,14 @@ export function Sidebar({ currentView, onNavigate, onLock }: SidebarProps) {
     tauriApi.getVaultStatus().then(setVaultStatus).catch(() => {});
   }, []);
 
+  // Poll vault status every 30 seconds to keep the indicator fresh
+  useEffect(() => {
+    const interval = setInterval(() => {
+      tauriApi.getVaultStatus().then(setVaultStatus).catch(() => {});
+    }, 30000);
+    return () => clearInterval(interval);
+  }, []);
+
   const navItems: { id: ViewId; label: string; icon: React.ReactElement }[] = [
     {
       id: 'chat',

@@ -1,7 +1,12 @@
 import { useState, useEffect } from 'react';
 import { tauriApi } from '../lib/tauri';
+import type { AppSettings, SecurityLevel } from '../lib/tauri';
 
-export function SettingsView() {
+interface SettingsViewProps {
+  vaultRoot: string;
+}
+
+export function SettingsView({ vaultRoot }: SettingsViewProps) {
   const [settings, setSettings] = useState({
     language: 'en',
     securityLevel: 'STANDARD',
@@ -12,29 +17,42 @@ export function SettingsView() {
     autoLockMinutes: 5,
     usbAutoDetect: true,
   });
+  const [appVersion, setAppVersion] = useState('v0.1.0');
 
-  // Load security level and vault info from backend on mount
+  // Load settings and version from backend on mount
   useEffect(() => {
     async function loadSettings() {
       try {
-        const [secLevel, vaultInfo] = await Promise.all([
+        const [secLevel, vaultInfo, backendSettings, version] = await Promise.all([
           tauriApi.getSecurityLevel(),
           tauriApi.detectVault(),
+          tauriApi.getSettings(vaultRoot).catch(() => null),
+          tauriApi.getVersion().catch(() => null),
         ]);
         setSettings(prev => ({
           ...prev,
           securityLevel: secLevel,
           modelPath: vaultInfo.detected ? vaultInfo.vault_root + '\\MODELS\\gemma4-12b-q4' : prev.modelPath,
+          ...(backendSettings ? {
+            maxTokens: backendSettings.max_tokens,
+            temperature: backendSettings.temperature,
+          } : {}),
         }));
+        if (version) setAppVersion(version);
       } catch {
         // Settings will use defaults if backend is unavailable
       }
     }
     loadSettings();
-  }, []);
+  }, [vaultRoot]);
 
   const handleChange = (key: string, value: string | number | boolean) => {
     setSettings(prev => ({ ...prev, [key]: value }));
+    if (key === 'securityLevel') {
+      tauriApi.setSecurityLevel(value as SecurityLevel).catch((err) => {
+        console.error('[SettingsView] setSecurityLevel failed:', err);
+      });
+    }
   };
 
   return (
@@ -194,7 +212,7 @@ export function SettingsView() {
             <div className="settings-section-header">About</div>
             <div className="settings-section-body">
               <div style={{ fontSize: '13px', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
-                <p><strong>UnoOne Power</strong> v0.1.0</p>
+                <p><strong>UnoOne Power</strong> {appVersion}</p>
                 <p>Private AI Desktop Workstation</p>
                 <p style={{ marginTop: '8px' }}>Model: Gemma 4 12B Q4_K_M GGUF</p>
                 <p>Runtime: llama.cpp</p>

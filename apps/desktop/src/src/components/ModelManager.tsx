@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { tauriApi, type ModelInfo, type ModelConfig, type ModelStatus, type AccelerationBackend } from '../lib/tauri';
+import { tauriApi, type ModelInfo, type ModelConfig, type ModelStatus, type AccelerationBackend, type SecurityLevel } from '../lib/tauri';
 
 export function ModelManager() {
   const [models, setModels] = useState<ModelInfo[]>([]);
@@ -8,6 +8,8 @@ export function ModelManager() {
   const [accelBackends, setAccelBackends] = useState<AccelerationBackend[]>([]);
   const [config, setConfig] = useState<ModelConfig | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [securityLevel, setSecurityLevel] = useState<SecurityLevel>('STANDARD');
 
   useEffect(() => {
     async function load() {
@@ -16,21 +18,23 @@ export function ModelManager() {
         const vaultInfo = await tauriApi.detectVault();
         const vaultRoot = vaultInfo.detected ? vaultInfo.vault_root : '';
 
-        const [modelList, backends, status, modelConfig] = await Promise.all([
+        const [modelList, backends, status, modelConfig, secLevel] = await Promise.all([
           tauriApi.listModels(vaultRoot),
           tauriApi.detectAcceleration(),
           tauriApi.getModelStatus(),
           tauriApi.getModelConfig(),
+          tauriApi.getSecurityLevel(),
         ]);
         setModels(modelList);
         setAccelBackends(backends);
         setModelStatus(status);
         setConfig(modelConfig);
+        setSecurityLevel(secLevel);
         if (modelList.length > 0 && modelList[0].available) {
           setSelectedModel(modelList[0].path);
         }
-      } catch (e) {
-        console.error('Failed to load model info:', e);
+      } catch (e: any) {
+        setError(e?.message || 'Failed to load model info');
       } finally {
         setLoading(false);
       }
@@ -42,6 +46,16 @@ export function ModelManager() {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', padding: '48px' }}>
         <span className="spinner" />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '48px', gap: '12px' }}>
+        <h3 style={{ color: 'var(--danger)' }}>Error</h3>
+        <p style={{ color: 'var(--text-secondary)', textAlign: 'center' }}>{error}</p>
+        <button onClick={() => { setError(null); setLoading(true); window.location.reload(); }}>Retry</button>
       </div>
     );
   }
@@ -210,7 +224,7 @@ export function ModelManager() {
           <p style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
             All model output goes through the canonical safety pipeline:<br />
             <strong>Model → Parser → ToolAction → SafetyGuard → Execution</strong><br />
-            Raw model output never executes tools directly. Security level: <strong>STANDARD</strong>
+            Raw model output never executes tools directly. Security level: <strong>{securityLevel}</strong>
           </p>
         </div>
       </div>

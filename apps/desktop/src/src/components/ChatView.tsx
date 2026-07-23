@@ -48,11 +48,12 @@ export function ChatView() {
 
   const checkModelStatus = useCallback(async () => {
     try {
-      await invoke('check_model_health');
+      await tauriApi.checkModelHealth();
       setModelStatus('loaded');
       setServerError('');
       return true;
-    } catch {
+    } catch (err) {
+      console.error('[ChatView] check_model_health failed:', err);
       setModelStatus('not_loaded');
       return false;
     }
@@ -66,7 +67,7 @@ export function ChatView() {
     if (!input.trim() || isGenerating) return;
 
     const userMessage: ChatMessage = {
-      id: Date.now().toString(),
+      id: crypto.randomUUID(),
       role: 'user',
       content: input.trim(),
       timestamp: Date.now(),
@@ -82,13 +83,10 @@ export function ChatView() {
         .filter(m => m.role === 'user' || m.role === 'assistant')
         .map(msg => ({ role: msg.role, content: msg.content }));
 
-      const result = await invoke<AgentResult>('agent_chat', {
-        message: input.trim(),
-        conversationHistory,
-      });
+      const result = await tauriApi.agentChat(input.trim(), conversationHistory);
 
       const assistantMessage: ChatMessage = {
-        id: (Date.now() + 1).toString(),
+        id: crypto.randomUUID(),
         role: 'assistant',
         content: result.final_text,
         timestamp: Date.now(),
