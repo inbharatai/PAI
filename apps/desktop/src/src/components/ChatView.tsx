@@ -1,14 +1,37 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 
 interface ChatMessage {
   id: string;
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'system';
   content: string;
   timestamp: number;
+  steps?: AgentStep[];
 }
 
-// llama-server HTTP API endpoint
-const LLAMA_SERVER_URL = 'http://127.0.0.1:8342';
+interface AgentStep {
+  type: 'Thinking' | 'ToolCall' | 'ToolResult' | 'SafetyBlock' | 'FinalResponse';
+  tool?: string;
+  args?: Record<string, unknown>;
+  result?: string;
+  reason?: string;
+  text?: string;
+  confidence?: number;
+  approved?: boolean;
+}
+
+interface AgentResult {
+  final_text: string;
+  steps: AgentStep[];
+  iterations: number;
+}
+
+interface ConversationTurn {
+  role: string;
+  content: string;
+  tool_calls?: unknown[];
+  tool_call_id?: string;
+}
 
 export function ChatView() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -22,26 +45,25 @@ export function ChatView() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Check if llama-server is reachable
+  // D1: Check model health via Tauri command (replaces raw fetch)
   const checkModelStatus = useCallback(async () => {
     try {
-      const response = await fetch(`${LLAMA_SERVER_URL}/health`, { signal: AbortSignal.timeout(2000) });
-      if (response.ok) {
-        setModelStatus('loaded');
-        setServerError('');
-        return true;
-      }
+      const result = await invoke('check_model_health');
+      // If we get here, llama-server is responding
+      setModelStatus('loaded');
+      setServerError('');
+      return true;
     } catch {
-      // Server not running
+      setModelStatus('not_loaded');
+      return false;
     }
-    setModelStatus('not_loaded');
-    return false;
   }, []);
 
   useEffect(() => {
     checkModelStatus();
   }, [checkModelStatus]);
 
+  // D2: Send message via the agentic loop (replaces direct fetch)
   const handleSend = async () => {
     if (!input.trim() || isGenerating) return;
 
@@ -58,49 +80,31 @@ export function ChatView() {
     setServerError('');
 
     try {
-      // Build conversation history for the model
-      const conversationHistory = messages
-        .concat(userMessage)
+      // Build conversation history for the agent
+      const conversationHistory: ConversationTurn[] = messages
+        .filter(m => m.role === 'user' || m.role === 'assistant')
         .map(msg => ({
           role: msg.role,
           content: msg.content,
         }));
 
-      // Call llama-server completion API
-      const response = await fetch(`${LLAMA_SERVER_URL}/v1/chat/completions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'gemma-4-12b',
-          messages: conversationHistory,
-          max_tokens: 4096,
-          temperature: 0.7,
-          stream: false,
-        }),
+      // D2: Call the backend agentic loop instead of direct fetch
+      const result = await invoke<AgentResult>('agent_chat', {
+        message: input.trim(),
+        conversationHistory,
       });
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Server error: ${response.status} — ${errorText}`);
-      }
-
-      const data = await response.json();
-      const assistantContent = data.choices?.[0]?.message?.content || data.content || '';
-
-      if (assistantContent) {
-        const assistantMessage: ChatMessage = {
-          id: (Date.now() + 1).toString(),
-          role: 'assistant',
-          content: assistantContent,
-          timestamp: Date.now(),
-        };
-        setMessages(prev => [...prev, assistantMessage]);
-      } else {
-        setServerError('Model returned an empty response.');
-      }
+      const assistantMessage: ChatMessage = {
+        id: (Date.now() + 1).toString(),
+        role: 'assistant',
+        content: result.final_text,
+        timestamp: Date.now(),
+        steps: result.steps,
+      };
+      setMessages(prev => [...prev, assistantMessage]);
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
-      if (errorMsg.includes('Failed to fetch') || errorMsg.includes('NetworkError') || errorMsg.includes('connect')) {
+      if (errorMsg.includes('Failed to connect') || errorMsg.includes('ECONNREFUSED') || errorMsg.includes('llama-server')) {
         setServerError('Cannot connect to Gemma 4. Make sure the model is loaded (Settings → Model Manager).');
       } else {
         setServerError(errorMsg);
@@ -119,6 +123,48 @@ export function ChatView() {
 
   const formatTime = (ts: number) => {
     return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  };
+
+  const renderSteps = (steps: AgentStep[]) => {
+    if (!steps || steps.length === 0) return null;
+
+    return (
+      <div className="agent-steps" style={{ marginTop: '8px', fontSize: '12px', color: 'var(--text-muted)' }}>
+        {steps.map((step, i) => {
+          switch (step.type) {
+            case 'ToolCall':
+              return (
+                <div key={i} style={{ padding: '2px 0', color: 'var(--info)' }}>
+                  🔧 Calling: {step.tool}
+                  {step.args && <span style={{ marginLeft: '4px', color: 'var(--text-secondary)' }}>
+                    {JSON.stringify(step.args).slice(0, 80)}
+                  </span>}
+                </div>
+              );
+            case 'ToolResult':
+              return (
+                <div key={i} style={{ padding: '2px 0', color: 'var(--success)' }}>
+                  ✅ {step.tool}: {step.result?.slice(0, 100)}
+                </div>
+              );
+            case 'SafetyBlock':
+              return (
+                <div key={i} style={{ padding: '2px 0', color: 'var(--danger)' }}>
+                  🛡️ Blocked: {step.tool} — {step.reason}
+                </div>
+              );
+            case 'Thinking':
+              return (
+                <div key={i} style={{ padding: '2px 0', color: 'var(--text-secondary)', fontStyle: 'italic' }}>
+                  💭 {step.text?.slice(0, 150)}
+                </div>
+              );
+            default:
+              return null;
+          }
+        })}
+      </div>
+    );
   };
 
   return (
@@ -150,6 +196,7 @@ export function ChatView() {
             </div>
             <div className="chat-bubble">
               <div style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</div>
+              {renderSteps(msg.steps || [])}
               <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
                 {formatTime(msg.timestamp)}
               </div>

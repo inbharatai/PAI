@@ -1,5 +1,5 @@
 // UnoOne Power — Private AI Desktop Workstation
-// Tauri backend: USB vault detection, hardware profiling, model management, safety guard
+// Tauri backend: USB vault detection, hardware profiling, model management, safety guard, agent loop
 
 mod llama;
 mod safety;
@@ -8,29 +8,52 @@ mod browser;
 mod documents;
 mod accessibility;
 mod security;
+mod agent;
 
 use std::sync::Mutex;
 use std::path::PathBuf;
+use unoone_vault_core::Vault;
 
-/// Shared vault state for cross-command persistence
-struct VaultState {
-    unlocked: bool,
-    vault_id: String,
-    vault_root: String,
+/// D7: Rich vault state that holds the live Vault object (with decrypted master key)
+/// after unlock, instead of dropping it. The Vault's Drop impl zeros the master key
+/// on drop, so locking sets Option to None (which drops the Vault, zeroing the key).
+struct DesktopVaultState {
+    /// The live Vault struct. None when locked, Some(Vault) when unlocked.
+    vault: Mutex<Option<Vault>>,
+    /// Fast metadata mirrors (for reads without locking the vault mutex).
+    unlocked: Mutex<bool>,
+    vault_id: Mutex<String>,
+    vault_root: Mutex<String>,
 }
 
 fn main() {
-    let vault_state = Mutex::new(VaultState {
-        unlocked: false,
-        vault_id: String::new(),
-        vault_root: String::new(),
-    });
+    let vault_state = DesktopVaultState {
+        vault: Mutex::new(None),
+        unlocked: Mutex::new(false),
+        vault_id: Mutex::new(String::new()),
+        vault_root: Mutex::new(String::new()),
+    };
 
     let recording_state = recording::RecordingStateHolder::new();
+
+    // D5: Safety guard held as Tauri managed state — persists across calls,
+    // accumulates audit log, and respects the current security level.
+    let safety_state = safety::SafetyGuardState {
+        guard: Mutex::new(safety::DesktopSafetyGuard::new(safety::SecurityLevel::Standard)),
+    };
+
+    // D1: Model manager state for inference pipeline
+    let model_state = llama::ModelManagerState::new();
+
+    // D2: Agent loop state
+    let agent_state = agent::AgentLoopState::new();
 
     tauri::Builder::default()
         .manage(vault_state)
         .manage(recording_state)
+        .manage(safety_state)
+        .manage(model_state)
+        .manage(agent_state)
         .invoke_handler(tauri::generate_handler![
             // Vault commands
             detect_vault,
@@ -45,10 +68,13 @@ fn main() {
             llama::detect_acceleration,
             llama::get_model_config,
             llama::get_model_status,
+            llama::send_chat_completion,
+            llama::check_model_health,
             // Safety guard
             safety::get_security_level,
             safety::set_security_level,
             safety::review_tool_action,
+            safety::get_audit_log,
             // Recording
             recording::start_recording,
             recording::pause_recording,
@@ -73,6 +99,11 @@ fn main() {
             security::verify_manifest,
             security::recover_from_crash,
             security::emergency_lock,
+            // D2: Agent loop
+            agent::agent_chat,
+            // D7: Vault state commands
+            vault_is_unlocked,
+            vault_read_record,
         ])
         .run(tauri::generate_context!())
         .expect("error while running UnoOne Power");
@@ -284,7 +315,7 @@ fn detect_vault() -> Result<VaultInfo, String> {
 }
 
 #[tauri::command]
-fn unlock_vault(password: String, vault_root: String, state: tauri::State<'_, Mutex<VaultState>>) -> Result<VaultUnlockResult, String> {
+fn unlock_vault(password: String, vault_root: String, state: tauri::State<'_, DesktopVaultState>) -> Result<VaultUnlockResult, String> {
     if password.is_empty() {
         return Ok(VaultUnlockResult {
             success: false,
@@ -302,18 +333,20 @@ fn unlock_vault(password: String, vault_root: String, state: tauri::State<'_, Mu
     }
 
     // Use vault-core to unlock the vault with Argon2id key derivation
-    // and XChaCha20-Poly1305 authenticated encryption
+    // and XChaCha20-Poly1305 authenticated encryption.
+    // D7: The Vault object is stored in Tauri managed state so it persists
+    // after unlock — the decrypted master key remains in memory for vault operations.
     let vault_path = PathBuf::from(&vault_root);
     let mut vault = unoone_vault_core::Vault::open(&vault_path)
         .map_err(|e| format!("Failed to open vault: {}", e))?;
 
     match vault.unlock(password.as_bytes()) {
         Ok(result) => {
-            // Update shared state
-            let mut vault_state = state.lock().map_err(|e| format!("State lock error: {}", e))?;
-            vault_state.unlocked = true;
-            vault_state.vault_id = result.vault_id.clone();
-            vault_state.vault_root = vault_root.clone();
+            // Store the live Vault in managed state (not dropped!)
+            *state.vault.lock().map_err(|e| format!("State lock error: {}", e))? = Some(vault);
+            *state.unlocked.lock().map_err(|e| format!("State lock error: {}", e))? = true;
+            *state.vault_id.lock().map_err(|e| format!("State lock error: {}", e))? = result.vault_id.clone();
+            *state.vault_root.lock().map_err(|e| format!("State lock error: {}", e))? = vault_root.clone();
 
             Ok(VaultUnlockResult {
                 success: true,
@@ -391,20 +424,43 @@ fn setup_vault(password: String, _profile_name: Option<String>, vault_root: Stri
 }
 
 #[tauri::command]
-fn lock_vault(state: tauri::State<'_, Mutex<VaultState>>) -> Result<(), String> {
-    let mut vault_state = state.lock().map_err(|e| format!("State lock error: {}", e))?;
+fn lock_vault(state: tauri::State<'_, DesktopVaultState>) -> Result<(), String> {
+    // D7: Properly lock and drop the Vault, zeroing the master key.
+    let mut vault_opt = state.vault.lock().map_err(|e| format!("State lock error: {}", e))?;
 
-    // Zero all sensitive data from memory
-    vault_state.unlocked = false;
-    vault_state.vault_id.clear();
-    vault_state.vault_root.clear();
+    if let Some(vault) = vault_opt.as_mut() {
+        // Vault::lock() zeros the master key via secure_zero.
+        vault.lock().map_err(|e| format!("Lock failed: {}", e))?;
+    }
 
-    // NOTE: When vault-core Vault struct is managed as Tauri state,
-    // Vault::lock() will be called to zero the master key from memory.
-    // The Vault struct's Drop implementation also zeros keys on drop.
-    // This ensures cryptographic keys are never left in memory after lock.
+    // Drop the Vault — its Drop impl also zeros any remaining key material.
+    *vault_opt = None;
+
+    // Clear metadata mirrors
+    *state.unlocked.lock().map_err(|e| format!("State lock error: {}", e))? = false;
+    state.vault_id.lock().map_err(|e| format!("State lock error: {}", e))?.clear();
+    state.vault_root.lock().map_err(|e| format!("State lock error: {}", e))?.clear();
 
     Ok(())
+}
+
+/// D7: Check if the vault is currently unlocked (fast metadata read, no vault lock needed).
+#[tauri::command]
+fn vault_is_unlocked(state: tauri::State<'_, DesktopVaultState>) -> bool {
+    *state.unlocked.lock().unwrap()
+}
+
+/// D7: Read a record from the unlocked vault. Returns the decrypted content as a string.
+#[tauri::command]
+fn vault_read_record(record_id: String, state: tauri::State<'_, DesktopVaultState>) -> Result<String, String> {
+    let vault_opt = state.vault.lock().map_err(|e| format!("State lock error: {}", e))?;
+    let vault = vault_opt.as_ref().ok_or("Vault is not unlocked")?;
+
+    let (_record, plaintext) = vault.read_record(&record_id)
+        .map_err(|e| format!("Read failed: {}", e))?;
+
+    String::from_utf8(plaintext)
+        .map_err(|e| format!("Record content is not valid UTF-8: {}", e))
 }
 
 #[tauri::command]
@@ -512,10 +568,12 @@ fn detect_usb_speed() -> String {
 }
 
 #[tauri::command]
-fn get_vault_status(state: tauri::State<'_, Mutex<VaultState>>) -> Result<VaultStatus, String> {
-    let vault_state = state.lock().map_err(|e| format!("State lock error: {}", e))?;
+fn get_vault_status(state: tauri::State<'_, DesktopVaultState>) -> Result<VaultStatus, String> {
+    let vault_root = state.vault_root.lock().map_err(|e| format!("State lock error: {}", e))?;
+    let unlocked = *state.unlocked.lock().map_err(|e| format!("State lock error: {}", e))?;
+    let vault_id = state.vault_id.lock().map_err(|e| format!("State lock error: {}", e))?;
 
-    if vault_state.vault_root.is_empty() {
+    if vault_root.is_empty() {
         return Ok(VaultStatus {
             is_connected: false,
             is_unlocked: false,
@@ -527,7 +585,7 @@ fn get_vault_status(state: tauri::State<'_, Mutex<VaultState>>) -> Result<VaultS
     }
 
     // Calculate real disk usage
-    let vault_path = std::path::Path::new(&vault_state.vault_root);
+    let vault_path = std::path::Path::new(&*vault_root);
     let used_space_bytes = dir_size(vault_path).unwrap_or(0);
     let used_space_gb = used_space_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
 
@@ -553,8 +611,8 @@ fn get_vault_status(state: tauri::State<'_, Mutex<VaultState>>) -> Result<VaultS
 
     Ok(VaultStatus {
         is_connected: true,
-        is_unlocked: vault_state.unlocked,
-        vault_id: vault_state.vault_id.clone(),
+        is_unlocked: unlocked,
+        vault_id: vault_id.clone(),
         profile_name,
         used_space_gb: (used_space_gb * 10.0).round() / 10.0,
         total_space_gb: (total_space_gb * 10.0).round() / 10.0,
