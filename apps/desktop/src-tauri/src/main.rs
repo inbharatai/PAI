@@ -13,7 +13,8 @@ mod voice;
 
 use std::sync::Mutex;
 use std::path::PathBuf;
-use unoone_vault_core::Vault;
+use unoone_vault_core::{Vault, Record, RecordType, PrivacyLevel};
+use base64::Engine;
 
 /// D7: Rich vault state that holds the live Vault object (with decrypted master key)
 /// after unlock, instead of dropping it. The Vault's Drop impl zeros the master key
@@ -36,6 +37,7 @@ fn main() {
     };
 
     let recording_state = recording::RecordingStateHolder::new();
+    let browser_state = browser::BrowserStateHolder::new();
 
     // D5/D6: Safety guard held as Tauri managed state — persists across calls,
     // accumulates audit log, respects the current security level, and D6:
@@ -63,6 +65,7 @@ fn main() {
     tauri::Builder::default()
         .manage(vault_state)
         .manage(recording_state)
+        .manage(browser_state)
         .manage(safety_state)
         .manage(model_state)
         .manage(agent_state)
@@ -82,6 +85,7 @@ fn main() {
             llama::get_model_status,
             llama::send_chat_completion,
             llama::check_model_health,
+            llama::detect_inference_backend,
             // Safety guard
             safety::get_security_level,
             safety::set_security_level,
@@ -97,6 +101,7 @@ fn main() {
             browser::browser_start_session,
             browser::browser_stop_session,
             browser::browser_execute,
+            browser::get_browser_bridge_script,
             // Documents and memory
             documents::list_documents,
             documents::process_document,
@@ -106,6 +111,7 @@ fn main() {
             accessibility::perform_ocr,
             accessibility::describe_image,
             accessibility::get_camera_info,
+            accessibility::encode_image_for_vision,
             // Security hardening
             security::generate_manifest,
             security::verify_manifest,
@@ -116,6 +122,7 @@ fn main() {
             // D7: Vault state commands
             vault_is_unlocked,
             vault_read_record,
+            vault_write_record,
             // Settings and configuration
             get_version,
             set_settings,
@@ -488,6 +495,76 @@ fn vault_read_record(record_id: String, state: tauri::State<'_, DesktopVaultStat
 
     String::from_utf8(plaintext)
         .map_err(|e| format!("Record content is not valid UTF-8: {}", e))
+}
+
+/// Write an encrypted record to the vault.
+/// Content is base64-encoded bytes — supports both text and binary (audio, images).
+/// The vault-core write_record encrypts with XChaCha20-Poly1305 using
+/// domain-derived keys before writing to disk. No plaintext is ever stored.
+#[tauri::command]
+fn vault_write_record(
+    record_type: String,
+    content_base64: String,
+    privacy_level: Option<String>,
+    parent_record_id: Option<String>,
+    state: tauri::State<'_, DesktopVaultState>,
+) -> Result<String, String> {
+    let mut vault_opt = state.vault.lock().map_err(|e| format!("State lock error: {}", e))?;
+    let vault = vault_opt.as_mut().ok_or("Vault is not unlocked")?;
+
+    // Decode base64 content
+    let content_bytes = base64::engine::general_purpose::STANDARD
+        .decode(&content_base64)
+        .map_err(|e| format!("Base64 decode failed: {}", e))?;
+
+    // Parse record type
+    let rtype = match record_type.to_uppercase().as_str() {
+        "CONVERSATION" => RecordType::Conversation,
+        "MESSAGE" => RecordType::Message,
+        "MEMORY" => RecordType::Memory,
+        "PREFERENCE" => RecordType::Preference,
+        "TASK" => RecordType::Task,
+        "TASK_STEP" => RecordType::TaskStep,
+        "TOOL_RESULT" => RecordType::ToolResult,
+        "DOCUMENT" => RecordType::Document,
+        "RECORDING" => RecordType::Recording,
+        "TRANSCRIPT" => RecordType::Transcript,
+        "TRANSCRIPT_SEGMENT" => RecordType::TranscriptSegment,
+        "SUMMARY" => RecordType::Summary,
+        "ACTION_ITEM" => RecordType::ActionItem,
+        "BROWSER_RESEARCH" => RecordType::BrowserResearch,
+        "CONTACT_REFERENCE" => RecordType::ContactReference,
+        "CONTEXT_SNAPSHOT" => RecordType::ContextSnapshot,
+        "AUDIT_RECORD" => RecordType::AuditRecord,
+        other => return Err(format!("Unknown record type: {}", other)),
+    };
+
+    // Parse privacy level
+    let plevel = match privacy_level.as_deref().unwrap_or("PRIVATE").to_uppercase().as_str() {
+        "PRIVATE" => PrivacyLevel::Private,
+        "SUMMARY_ONLY" => PrivacyLevel::SummaryOnly,
+        "METADATA_ONLY" => PrivacyLevel::MetadataOnly,
+        other => return Err(format!("Unknown privacy level: {}", other)),
+    };
+
+    // Build the record — save ID before write_record takes ownership
+    let device_id = std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .unwrap_or_else(|_| "desktop-unknown".to_string());
+
+    let mut record = Record::new(rtype, "DESKTOP", &device_id);
+    record.privacy_level = plevel;
+    if let Some(parent_id) = parent_record_id {
+        record.parent_record_id = Some(parent_id);
+    }
+
+    let record_id = record.record_id.clone();
+
+    // Encrypt and write to vault — XChaCha20-Poly1305 with domain key
+    vault.write_record(record, &content_bytes)
+        .map_err(|e| format!("Write failed: {}", e))?;
+
+    Ok(record_id)
 }
 
 #[tauri::command]

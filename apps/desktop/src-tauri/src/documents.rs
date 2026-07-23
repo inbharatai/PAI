@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::io::Read;
 use std::path::PathBuf;
 
 /// Supported document types (mirrors core-contracts Document.kt)
@@ -327,15 +328,66 @@ impl DocumentProcessor {
                                         }
                                     }
                                 }
+                                "xlsx" | "xls" => {
+                                    // XLSX — extract cell data from ZIP+XML
+                                    match extract_xlsx_text(&path) {
+                                        Ok(text) => {
+                                            let word_count = text.split_whitespace().count();
+                                            return DocumentProcessResult {
+                                                document_id: document_id.to_string(),
+                                                success: true,
+                                                extracted_text: Some(text),
+                                                summary: Some(format!("[XLSX extracted, {} words]", word_count)),
+                                                error: None,
+                                                processing_time_ms: start.elapsed().as_millis() as u64,
+                                            };
+                                        }
+                                        Err(e) => {
+                                            return DocumentProcessResult {
+                                                document_id: document_id.to_string(),
+                                                success: false,
+                                                extracted_text: None,
+                                                summary: None,
+                                                error: Some(format!("Failed to extract XLSX text: {}", e)),
+                                                processing_time_ms: start.elapsed().as_millis() as u64,
+                                            };
+                                        }
+                                    }
+                                }
+                                "pptx" | "ppt" => {
+                                    // PPTX — extract slide text from ZIP+XML
+                                    match extract_pptx_text(&path) {
+                                        Ok(text) => {
+                                            let word_count = text.split_whitespace().count();
+                                            return DocumentProcessResult {
+                                                document_id: document_id.to_string(),
+                                                success: true,
+                                                extracted_text: Some(text),
+                                                summary: Some(format!("[PPTX extracted, {} words]", word_count)),
+                                                error: None,
+                                                processing_time_ms: start.elapsed().as_millis() as u64,
+                                            };
+                                        }
+                                        Err(e) => {
+                                            return DocumentProcessResult {
+                                                document_id: document_id.to_string(),
+                                                success: false,
+                                                extracted_text: None,
+                                                summary: None,
+                                                error: Some(format!("Failed to extract PPTX text: {}", e)),
+                                                processing_time_ms: start.elapsed().as_millis() as u64,
+                                            };
+                                        }
+                                    }
+                                }
                                 _ => {
-                                    // Formats not yet supported: XLSX, PPTX, images, audio
                                     return DocumentProcessResult {
                                         document_id: document_id.to_string(),
                                         success: false,
                                         extracted_text: None,
                                         summary: None,
                                         error: Some(format!(
-                                            "Document format .{} is not yet supported. Supported: .txt, .md, .csv, .html, .pdf, .docx",
+                                            "Document format .{} is not yet supported. Supported: .txt, .md, .csv, .html, .pdf, .docx, .xlsx, .pptx",
                                             ext_str
                                         )),
                                         processing_time_ms: start.elapsed().as_millis() as u64,
@@ -551,74 +603,45 @@ fn strip_html_tags(html: &str) -> String {
     }
 }
 
-/// Extract text from a PDF using lopdf
+/// Extract text from a PDF using the lopdf crate for proper content stream parsing
 fn extract_pdf_text(path: &PathBuf) -> Result<String, String> {
-    // Basic PDF text extraction: read the file and extract text streams
-    // For production, this should use the lopdf crate. For now, we use
-    // a simple approach that extracts visible text between stream markers.
-    let data = std::fs::read(path)
-        .map_err(|e| format!("Failed to read PDF: {}", e))?;
+    let pdf = lopdf::Document::load(path)
+        .map_err(|e| format!("Failed to parse PDF: {}", e))?;
 
-    let content = String::from_utf8_lossy(&data);
     let mut text_parts: Vec<String> = Vec::new();
 
-    // Extract text from BT...ET blocks (PDF text objects)
-    let mut in_text = false;
-    for line in content.lines() {
-        if line.contains("BT") {
-            in_text = true;
-        } else if line.contains("ET") {
-            in_text = false;
-        } else if in_text {
-            // Extract text from Tj and TJ operators
-            // Tj: (text) Tj
-            if let Some(text) = extract_pdf_string(line) {
-                text_parts.push(text);
+    // Iterate over all pages using the page tree
+    let pages = pdf.get_pages();
+
+    for (_, page_id) in pages {
+        // Get the page content stream
+        match pdf.get_page_content(page_id) {
+            Ok(content) => {
+                // Parse the content stream for text operators
+                let content_str = String::from_utf8_lossy(&content);
+
+                // Extract text from Tj and TJ operators
+                for line in content_str.lines() {
+                    if let Some(text) = extract_pdf_string(line) {
+                        if !text.trim().is_empty() {
+                            text_parts.push(text);
+                        }
+                    }
+                }
             }
+            Err(_) => continue, // Skip pages that can't be read
         }
     }
 
-    // Also try to extract text between parentheses (simple PDFs)
+    // If lopdf extraction yielded nothing, the PDF might be image-based
     if text_parts.is_empty() {
-        // Fallback: try extracting any readable text chunks
-        let bytes = &data;
-        let mut readable_chunks: Vec<String> = Vec::new();
-        let mut current = String::new();
-
-        for &byte in bytes.iter() {
-            if byte >= 32 && byte < 127 {
-                current.push(byte as char);
-            } else {
-                if current.len() > 5 { // Only keep chunks > 5 chars
-                    readable_chunks.push(current.clone());
-                }
-                current.clear();
-            }
-        }
-        if current.len() > 5 {
-            readable_chunks.push(current);
-        }
-
-        if readable_chunks.is_empty() {
-            return Err("No text could be extracted from this PDF. It may be image-based or encrypted.".to_string());
-        }
-
-        let text = readable_chunks.join(" ");
-        let word_count = text.split_whitespace().count();
-        if word_count < 3 {
-            return Err("PDF appears to contain no readable text. It may be image-based.".to_string());
-        }
-
-        return Ok(if text.len() > 8000 {
-            format!("{}...\n\n[Truncated — {} total chars]", &text[..8000], text.len())
-        } else {
-            text
-        });
+        return Err("No text could be extracted from this PDF. It may be image-based or encrypted.".to_string());
     }
 
     let result = text_parts.join(" ");
-    if result.trim().is_empty() {
-        return Err("No text could be extracted from this PDF.".to_string());
+    let word_count = result.split_whitespace().count();
+    if word_count < 3 {
+        return Err("PDF appears to contain no readable text. It may be image-based.".to_string());
     }
 
     Ok(if result.len() > 8000 {
@@ -641,100 +664,264 @@ fn extract_pdf_string(line: &str) -> Option<String> {
     None
 }
 
-/// Extract text from a DOCX file (ZIP containing XML)
+/// Extract text from a DOCX file using proper ZIP+XML parsing
 fn extract_docx_text(path: &PathBuf) -> Result<String, String> {
-    // DOCX files are ZIP archives containing word/document.xml
-    // We extract the XML and strip tags to get plain text
-    let data = std::fs::read(path)
-        .map_err(|e| format!("Failed to read DOCX: {}", e))?;
+    let file = std::fs::File::open(path)
+        .map_err(|e| format!("Failed to open DOCX: {}", e))?;
+    let mut archive = zip::ZipArchive::new(file)
+        .map_err(|e| format!("Failed to read DOCX as ZIP: {}", e))?;
 
-    // Find the word/document.xml entry in the ZIP
-    // ZIP local file header starts with PK\x03\x04
-    let mut text_content = String::new();
-    let mut found_xml = false;
-
-    // Simple ZIP extraction: look for "word/document.xml" in the archive
-    // and extract the content between XML tags
-    let content = String::from_utf8_lossy(&data);
-
-    // Try to find document.xml content (between PK markers)
-    if let Some(xml_start) = content.find("word/document.xml") {
-        // The XML content follows after the local file header
-        // Look for the actual XML content starting with <?xml or <w:document
-        if let Some(xml_idx) = content[xml_start..].find("<?xml").or_else(|| content[xml_start..].find("<w:document")) {
-            let xml_content_start = xml_start + xml_idx;
-            // Find the end of the XML
-            if let Some(xml_end) = content[xml_content_start..].find("</w:document>") {
-                let xml = &content[xml_content_start..xml_content_start + xml_end + 14]; // +14 for </w:document>
-                text_content = strip_xml_tags(xml);
-                found_xml = true;
-            }
+    // Find word/document.xml in the ZIP
+    let doc_xml = match archive.by_name("word/document.xml") {
+        Ok(mut file) => {
+            let mut content = String::new();
+            file.read_to_string(&mut content)
+                .map_err(|e| format!("Failed to read document.xml: {}", e))?;
+            content
         }
+        Err(_) => return Err("word/document.xml not found in DOCX archive".to_string()),
+    };
+
+    // Parse XML and extract text from <w:t> elements
+    let text = extract_text_from_docx_xml(&doc_xml);
+
+    if text.trim().is_empty() {
+        return Err("No text could be extracted from this DOCX file.".to_string());
     }
 
-    if !found_xml || text_content.trim().is_empty() {
-        // Fallback: try to find any readable text chunks
-        let readable: Vec<String> = content.split(|c: char| !c.is_alphanumeric() && c != ' ' && c != '.' && c != ',' && c != '!' && c != '?')
-            .filter(|s| s.trim().len() > 20)
-            .map(|s| s.trim().to_string())
-            .collect();
-
-        if readable.is_empty() {
-            return Err("No text could be extracted from this DOCX file.".to_string());
-        }
-
-        text_content = readable.join(" ");
-    }
-
-    let word_count = text_content.split_whitespace().count();
-    if word_count < 2 {
-        return Err("DOCX appears to contain no readable text.".to_string());
-    }
-
-    Ok(if text_content.len() > 8000 {
-        format!("{}...\n\n[Truncated — {} total chars]", &text_content[..8000], text_content.len())
+    Ok(if text.len() > 8000 {
+        format!("{}...\n\n[Truncated — {} total chars]", &text[..8000], text.len())
     } else {
-        text_content
+        text
     })
 }
 
-/// Strip XML tags from content, keeping only text between <w:t> tags (DOCX text runs)
-fn strip_xml_tags(xml: &str) -> String {
-    let mut result = String::new();
-    let mut in_text_tag = false;
-    let mut in_tag = false;
+/// Parse DOCX XML and extract text from <w:t> elements using quick-xml
+fn extract_text_from_docx_xml(xml: &str) -> String {
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
 
-    // Extract text from <w:t> tags which contain the actual text in DOCX
-    for segment in xml.split("<w:t") {
-        if segment == xml {
-            // First segment before any <w:t> — skip
-            continue;
-        }
-        // Find the end of the opening tag (might have attributes)
-        if let Some(gt_pos) = segment.find('>') {
-            let text_after_tag = &segment[gt_pos + 1..];
-            // Find the closing </w:t>
-            if let Some(end_pos) = text_after_tag.find("</w:t>") {
-                result.push_str(&text_after_tag[..end_pos]);
-                result.push(' ');
+    let mut reader = Reader::from_str(xml);
+    let mut text_parts: Vec<String> = Vec::new();
+    let mut in_wt = false;
+    let mut buf = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
+                let local_name = e.local_name();
+                if local_name.as_ref() == b"t" {
+                    in_wt = true;
+                }
             }
+            Ok(Event::Text(ref e)) => {
+                if in_wt {
+                    if let Ok(text) = e.unescape() {
+                        text_parts.push(text.to_string());
+                    }
+                }
+            }
+            Ok(Event::End(ref e)) => {
+                if e.local_name().as_ref() == b"t" {
+                    in_wt = false;
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    text_parts.join(" ")
+}
+
+/// Extract text from an XLSX file using ZIP+XML parsing
+fn extract_xlsx_text(path: &PathBuf) -> Result<String, String> {
+    let file = std::fs::File::open(path)
+        .map_err(|e| format!("Failed to open XLSX: {}", e))?;
+    let mut archive = zip::ZipArchive::new(file)
+        .map_err(|e| format!("Failed to read XLSX as ZIP: {}", e))?;
+
+    // Load the shared strings table
+    let mut shared_strings: Vec<String> = Vec::new();
+    if let Ok(mut ss_file) = archive.by_name("xl/sharedStrings.xml") {
+        let mut content = String::new();
+        ss_file.read_to_string(&mut content)
+            .map_err(|e| format!("Failed to read sharedStrings.xml: {}", e))?;
+        shared_strings = parse_xlsx_shared_strings(&content);
+    }
+
+    // Extract cell data from each worksheet
+    let mut all_text = Vec::new();
+    let mut sheet_idx = 1;
+    loop {
+        let sheet_name = format!("xl/worksheets/sheet{}.xml", sheet_idx);
+        match archive.by_name(&sheet_name) {
+            Ok(mut sheet_file) => {
+                let mut content = String::new();
+                sheet_file.read_to_string(&mut content)
+                    .map_err(|e| format!("Failed to read {}: {}", sheet_name, e))?;
+                let sheet_text = parse_xlsx_sheet(&content, &shared_strings);
+                if !sheet_text.trim().is_empty() {
+                    all_text.push(format!("--- Sheet {} ---\n{}", sheet_idx, sheet_text));
+                }
+                sheet_idx += 1;
+            }
+            Err(_) => break,
         }
     }
 
-    // Also extract from <w:t> without attributes
-    if result.is_empty() {
-        // Fallback: strip all XML tags
-        for ch in xml.chars() {
-            match ch {
-                '<' => in_tag = true,
-                '>' => { in_tag = false; result.push(' '); }
-                _ if !in_tag => result.push(ch),
-                _ => {}
+    if all_text.is_empty() {
+        return Err("No text could be extracted from this XLSX file.".to_string());
+    }
+    Ok(all_text.join("\n\n"))
+}
+
+/// Parse XLSX shared strings XML
+fn parse_xlsx_shared_strings(xml: &str) -> Vec<String> {
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
+
+    let mut reader = Reader::from_str(xml);
+    let mut strings = Vec::new();
+    let mut in_si = false;
+    let mut in_t = false;
+    let mut current = String::new();
+    let mut buf = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) => {
+                if e.local_name().as_ref() == b"si" { in_si = true; current.clear(); }
+                if e.local_name().as_ref() == b"t" { in_t = true; }
             }
+            Ok(Event::End(ref e)) => {
+                if e.local_name().as_ref() == b"si" {
+                    in_si = false;
+                    strings.push(current.trim().to_string());
+                }
+                if e.local_name().as_ref() == b"t" { in_t = false; }
+            }
+            Ok(Event::Text(ref e)) => {
+                if in_t && in_si {
+                    if let Ok(text) = e.unescape() { current.push_str(&text); }
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    strings
+}
+
+/// Parse an XLSX worksheet and return cell data as tab-separated rows
+fn parse_xlsx_sheet(xml: &str, shared_strings: &[String]) -> String {
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
+
+    let mut reader = Reader::from_str(xml);
+    let mut rows: Vec<String> = Vec::new();
+    let mut current_row = String::new();
+    let mut in_value = false;
+    let mut buf = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) => {
+                if e.local_name().as_ref() == b"v" { in_value = true; }
+            }
+            Ok(Event::End(ref e)) => {
+                if e.local_name().as_ref() == b"v" { in_value = false; }
+                if e.local_name().as_ref() == b"row" {
+                    if !current_row.is_empty() { rows.push(current_row.clone()); }
+                    current_row.clear();
+                }
+            }
+            Ok(Event::Text(ref e)) => {
+                if in_value {
+                    if let Ok(text) = e.unescape() {
+                        let idx: usize = text.parse().unwrap_or(0);
+                        let cell_text = if idx < shared_strings.len() { shared_strings[idx].clone() } else { text.to_string() };
+                        if !current_row.is_empty() { current_row.push('\t'); }
+                        current_row.push_str(&cell_text);
+                    }
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    rows.join("\n")
+}
+
+/// Extract text from a PPTX file — slide text from <a:t> elements
+fn extract_pptx_text(path: &PathBuf) -> Result<String, String> {
+    let file = std::fs::File::open(path)
+        .map_err(|e| format!("Failed to open PPTX: {}", e))?;
+    let mut archive = zip::ZipArchive::new(file)
+        .map_err(|e| format!("Failed to read PPTX as ZIP: {}", e))?;
+
+    let mut slides = Vec::new();
+    let mut slide_idx = 1;
+
+    loop {
+        let slide_name = format!("ppt/slides/slide{}.xml", slide_idx);
+        match archive.by_name(&slide_name) {
+            Ok(mut slide_file) => {
+                let mut content = String::new();
+                slide_file.read_to_string(&mut content)
+                    .map_err(|e| format!("Failed to read {}: {}", slide_name, e))?;
+                let slide_text = parse_pptx_slide(&content);
+                if !slide_text.trim().is_empty() {
+                    slides.push(format!("--- Slide {} ---\n{}", slide_idx, slide_text));
+                }
+                slide_idx += 1;
+            }
+            Err(_) => break,
         }
     }
 
-    result.split_whitespace().collect::<Vec<_>>().join(" ")
+    if slides.is_empty() {
+        return Err("No text could be extracted from this PPTX file.".to_string());
+    }
+    Ok(slides.join("\n\n"))
+}
+
+/// Parse a PPTX slide XML and extract text from <a:t> elements
+fn parse_pptx_slide(xml: &str) -> String {
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
+
+    let mut reader = Reader::from_str(xml);
+    let mut text_parts: Vec<String> = Vec::new();
+    let mut in_at = false;
+    let mut buf = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) => {
+                if e.local_name().as_ref() == b"t" { in_at = true; }
+            }
+            Ok(Event::End(ref e)) => {
+                if e.local_name().as_ref() == b"t" { in_at = false; }
+            }
+            Ok(Event::Text(ref e)) => {
+                if in_at {
+                    if let Ok(text) = e.unescape() { text_parts.push(text.to_string()); }
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    text_parts.join(" ")
 }
 
 // Tauri commands

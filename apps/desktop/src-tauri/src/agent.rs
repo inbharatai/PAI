@@ -4,7 +4,7 @@
 // Model → parse tool calls → safety guard → execute tools → observe → loop.
 
 use crate::documents;
-use crate::llama::{ConversationTurn, InferenceRequest, ModelManagerState, ToolDefinition};
+use crate::llama::{Content, ConversationTurn, InferenceRequest, ModelManagerState, ToolDefinition};
 use crate::safety::{SafetyGuardState, ToolAction};
 use crate::security;
 use serde::{Deserialize, Serialize};
@@ -275,7 +275,7 @@ pub async fn agent_chat(
     // Add the user message to history
     history.push(ConversationTurn {
         role: "user".to_string(),
-        content: message,
+        content: Content::text(message),
         tool_calls: None,
         tool_call_id: None,
     });
@@ -295,12 +295,15 @@ pub async fn agent_chat(
             tools: Some(tool_definitions.clone()),
         };
 
-        let response = model_state.manager.lock()
-            .map_err(|e| format!("State lock error: {}", e))?
-            .as_ref()
-            .ok_or("Model manager not initialized")?
-            .send_completion(&request, model_state.server_port)
-            .await?;
+        let port = *model_state.server_port.lock()
+            .map_err(|e| format!("State lock error: {}", e))?;
+        let response = {
+            let manager = model_state.manager.lock().await;
+            manager.as_ref()
+                .ok_or("Model manager not initialized")?
+                .send_completion(&request, port)
+                .await?
+        };
 
         // 2. Check if model wants to call tools
         if let Some(tool_calls) = &response.tool_calls {
@@ -337,7 +340,7 @@ pub async fn agent_chat(
                         // Feed the blocked result back as a tool observation
                         history.push(ConversationTurn {
                             role: "tool".to_string(),
-                            content: format!("Tool '{}' was blocked: {}", tc.name, verdict.reason),
+                            content: Content::text(format!("Tool '{}' was blocked: {}", tc.name, verdict.reason)),
                             tool_calls: None,
                             tool_call_id: Some(tc.id.clone()),
                         });
@@ -363,7 +366,7 @@ pub async fn agent_chat(
                     // 2d. Feed result back to model
                     history.push(ConversationTurn {
                         role: "tool".to_string(),
-                        content: result,
+                        content: Content::text(result),
                         tool_calls: None,
                         tool_call_id: Some(tc.id.clone()),
                     });
@@ -380,7 +383,7 @@ pub async fn agent_chat(
         });
         history.push(ConversationTurn {
             role: "assistant".to_string(),
-            content: response.text,
+            content: Content::text(response.text),
             tool_calls: None,
             tool_call_id: None,
         });
@@ -398,9 +401,11 @@ pub async fn agent_chat(
         .find_map(|s| if let AgentStep::FinalResponse { text } = s { Some(text.clone()) } else { None })
         .unwrap_or_default();
 
+    let iterations = steps.len() as u32;
+
     Ok(AgentResult {
         final_text,
         steps,
-        iterations: steps.len() as u32,
+        iterations,
     })
 }

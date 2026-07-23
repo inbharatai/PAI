@@ -7,6 +7,7 @@
 // as valid — every file must have a computed SHA-256.
 
 use hmac::{Hmac, Mac};
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Sha256, Digest};
 use std::path::PathBuf;

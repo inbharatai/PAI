@@ -19,6 +19,8 @@ pub struct ModelConfig {
     pub top_k: u32,
     pub repeat_penalty: f32,
     pub max_tokens: u32,
+    /// Path to the multimodal projector (mmproj) model file for vision/OCR
+    pub mmproj_path: Option<String>,
 }
 
 impl Default for ModelConfig {
@@ -34,6 +36,7 @@ impl Default for ModelConfig {
             top_k: 40,
             repeat_penalty: 1.1,
             max_tokens: 4096,
+            mmproj_path: None,
         }
     }
 }
@@ -71,15 +74,66 @@ pub struct InferenceRequest {
     pub tools: Option<Vec<ToolDefinition>>,
 }
 
-/// Conversation turn — D1: extended with tool_calls for multi-turn function calling
+/// Conversation turn — extended with multimodal content support for vision/OCR
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationTurn {
     pub role: String,  // "user", "assistant", or "tool"
-    pub content: String,
+    pub content: Content,
     /// For assistant turns with tool calls, the OpenAI-format tool_calls array
     pub tool_calls: Option<Vec<ToolCallResult>>,
     /// For tool role turns, the ID of the tool call this responds to
     pub tool_call_id: Option<String>,
+}
+
+/// Content can be plain text or an array of multimodal parts (text + images)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Content {
+    /// Plain text content (backward compatible with existing messages)
+    Text(String),
+    /// Multimodal content array (text + image_url parts)
+    Multimodal(Vec<ContentPart>),
+}
+
+impl Default for Content {
+    fn default() -> Self {
+        Content::Text(String::new())
+    }
+}
+
+impl Content {
+    /// Create plain text content
+    pub fn text(s: impl Into<String>) -> Self {
+        Content::Text(s.into())
+    }
+
+    /// Create multimodal content with an image
+    pub fn with_image(prompt: &str, image_base64: &str, mime_type: &str) -> Self {
+        Content::Multimodal(vec![
+            ContentPart::text { text: prompt.to_string() },
+            ContentPart::image_url {
+                image_url: ImageUrl {
+                    url: format!("data:{};base64,{}", mime_type, image_base64),
+                },
+            },
+        ])
+    }
+}
+
+/// A single part of multimodal content (OpenAI format)
+/// Serializes as {"type": "text", "text": "..."} or {"type": "image_url", "image_url": {"url": "..."}}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+#[allow(non_camel_case_types)]
+pub enum ContentPart {
+    text { text: String },
+    image_url { image_url: ImageUrl },
+}
+
+/// Image URL with data URI support
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageUrl {
+    pub url: String,  // data:image/png;base64,... or https://...
 }
 
 /// D1: Tool definition for OpenAI-compatible function calling
@@ -452,6 +506,14 @@ impl ModelManager {
             cmd.args(["-ngl", &config.gpu_layers.to_string()]);
         }
 
+        // Multimodal projector (mmproj) for vision/OCR
+        if let Some(mmproj) = &config.mmproj_path {
+            let mmproj_path = PathBuf::from(mmproj);
+            if mmproj_path.exists() {
+                cmd.args(["--mmproj", mmproj]);
+            }
+        }
+
         // Threads
         if config.threads > 0 {
             cmd.args(["-t", &config.threads.to_string()]);
@@ -527,7 +589,28 @@ impl ModelManager {
             messages.push(serde_json::json!({"role": "system", "content": sys}));
         }
         for turn in &request.conversation_history {
-            let mut msg = serde_json::json!({"role": turn.role, "content": turn.content});
+            // Serialize Content enum: Text becomes a plain string,
+            // Multimodal becomes an array of content parts
+            let content_value = match &turn.content {
+                Content::Text(text) => serde_json::json!(text),
+                Content::Multimodal(parts) => {
+                    serde_json::json!(parts.iter().map(|part| {
+                        match part {
+                            ContentPart::text { text } => serde_json::json!({
+                                "type": "text",
+                                "text": text,
+                            }),
+                            ContentPart::image_url { image_url } => serde_json::json!({
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": image_url.url,
+                                },
+                            }),
+                        }
+                    }).collect::<Vec<_>>())
+                }
+            };
+            let mut msg = serde_json::json!({"role": turn.role, "content": content_value});
             if let Some(tool_calls) = &turn.tool_calls {
                 msg["tool_calls"] = serde_json::json!(tool_calls.iter().map(|tc| {
                     serde_json::json!({
@@ -683,17 +766,17 @@ impl ModelManager {
 }
 
 /// D1: State wrapper for ModelManager so it can be held as Tauri managed state.
-/// The ModelManager itself is not Send+Sync, so we wrap it in Mutex<Option<ModelManager>>.
+/// Uses tokio::sync::Mutex so the guard can be held across .await points (Send).
 pub struct ModelManagerState {
-    pub manager: Mutex<Option<ModelManager>>,
-    pub server_port: u16,
+    pub manager: tokio::sync::Mutex<Option<ModelManager>>,
+    pub server_port: std::sync::Mutex<u16>,
 }
 
 impl ModelManagerState {
     pub fn new() -> Self {
         Self {
-            manager: Mutex::new(None),
-            server_port: 8342,
+            manager: tokio::sync::Mutex::new(None),
+            server_port: std::sync::Mutex::new(8342),
         }
     }
 }
@@ -756,26 +839,108 @@ pub async fn send_chat_completion(
     request: InferenceRequest,
     state: tauri::State<'_, ModelManagerState>,
 ) -> Result<InferenceResponse, String> {
-    let manager = state.manager.lock().map_err(|e| format!("State lock error: {}", e))?;
+    let port = *state.server_port.lock().map_err(|e| format!("State lock error: {}", e))?;
+    let manager = state.manager.lock().await;
     let manager = manager.as_ref().ok_or("Model manager not initialized")?;
-    manager.send_completion(&request, state.server_port).await
+    manager.send_completion(&request, port).await
 }
 
 /// D1: Proper health check using reqwest instead of raw TCP.
+/// Tries the configured port first, then falls back to Ollama on 11434.
 #[tauri::command]
 pub async fn check_model_health() -> Result<serde_json::Value, String> {
     let client = reqwest::Client::new();
+
+    // Try default UnoOne port first
     let response = client.get("http://127.0.0.1:8342/health")
         .timeout(std::time::Duration::from_secs(3))
         .send()
-        .await
-        .map_err(|e| format!("Health check failed: {}", e))?;
+        .await;
 
-    if !response.status().is_success() {
-        return Err(format!("Health check returned status: {}", response.status()));
+    match response {
+        Ok(resp) if resp.status().is_success() => {
+            let body: serde_json::Value = resp.json().await
+                .map_err(|e| format!("Failed to parse health response: {}", e))?;
+            Ok(body)
+        }
+        _ => {
+            // Try Ollama on port 11434 as fallback
+            let ollama_response = client.get("http://127.0.0.1:11434/api/tags")
+                .timeout(std::time::Duration::from_secs(3))
+                .send()
+                .await;
+
+            match ollama_response {
+                Ok(resp) if resp.status().is_success() => {
+                    let body: serde_json::Value = resp.json().await
+                        .map_err(|e| format!("Failed to parse Ollama response: {}", e))?;
+                    Ok(serde_json::json!({
+                        "backend": "ollama",
+                        "status": "running",
+                        "models": body.get("models"),
+                    }))
+                }
+                _ => Err("No inference backend available. Neither llama-server (port 8342) nor Ollama (port 11434) is responding.".to_string())
+            }
+        }
+    }
+}
+
+/// Detect which inference backend is available and its port.
+/// Checks: 1) llama-server on 8342, 2) Ollama on 11434, 3) LM Studio on 1234
+/// Returns the backend type and port so the app can route requests correctly.
+#[tauri::command]
+pub async fn detect_inference_backend() -> Result<serde_json::Value, String> {
+    let client = reqwest::Client::new();
+
+    // Check llama-server on default port
+    if let Ok(resp) = client.get("http://127.0.0.1:8342/v1/models")
+        .timeout(std::time::Duration::from_secs(2))
+        .send()
+        .await
+    {
+        if resp.status().is_success() {
+            return Ok(serde_json::json!({
+                "backend": "llama-server",
+                "port": 8342,
+                "url": "http://127.0.0.1:8342",
+                "compatible": "openai",
+            }));
+        }
     }
 
-    let body: serde_json::Value = response.json().await
-        .map_err(|e| format!("Failed to parse health response: {}", e))?;
-    Ok(body)
+    // Check Ollama on default port
+    if let Ok(resp) = client.get("http://127.0.0.1:11434/api/tags")
+        .timeout(std::time::Duration::from_secs(2))
+        .send()
+        .await
+    {
+        if resp.status().is_success() {
+            return Ok(serde_json::json!({
+                "backend": "ollama",
+                "port": 11434,
+                "url": "http://127.0.0.1:11434",
+                "compatible": "ollama",
+                "note": "Ollama uses /api/chat endpoint, not OpenAI-compatible /v1/chat/completions",
+            }));
+        }
+    }
+
+    // Check LM Studio on default port
+    if let Ok(resp) = client.get("http://127.0.0.1:1234/v1/models")
+        .timeout(std::time::Duration::from_secs(2))
+        .send()
+        .await
+    {
+        if resp.status().is_success() {
+            return Ok(serde_json::json!({
+                "backend": "lm-studio",
+                "port": 1234,
+                "url": "http://127.0.0.1:1234",
+                "compatible": "openai",
+            }));
+        }
+    }
+
+    Err("No inference backend detected. Start llama-server, Ollama, or LM Studio first.".to_string())
 }

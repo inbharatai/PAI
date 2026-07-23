@@ -17,4 +17,5 @@ pub mod recovery;
 pub mod vault;
 
 pub use error::VaultError;
+pub use record::{Record, RecordType, PrivacyLevel};
 pub use vault::Vault;

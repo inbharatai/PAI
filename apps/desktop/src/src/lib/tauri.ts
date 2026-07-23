@@ -72,9 +72,25 @@ export interface ModelConfig {
   max_tokens: number;
 }
 
+export type Content = string | ContentPart[];
+
+export interface ContentPart {
+  type: 'text' | 'image_url';
+  text?: string;
+  image_url?: { url: string };
+}
+
 export interface ConversationTurn {
-  role: 'user' | 'assistant';
-  content: string;
+  role: 'user' | 'assistant' | 'tool';
+  content: Content;
+  tool_calls?: ToolCallResult[];
+  tool_call_id?: string;
+}
+
+export interface ToolCallResult {
+  id: string;
+  name: string;
+  arguments: Record<string, unknown>;
 }
 
 export interface InferenceRequest {
@@ -155,6 +171,28 @@ export interface AccessibilityStatus {
   reduced_motion: boolean;
   font_scale: number;
   screen_reader_name: string;
+}
+
+export interface OcrResult {
+  text: string;
+  confidence: number;
+  language: string;
+  processing_time_ms: number;
+}
+
+export interface BlindViewResult {
+  description: string;
+  objects: DetectedObject[];
+  confidence: number;
+}
+
+export interface DetectedObject {
+  label: string;
+  confidence: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 export interface AgentStep {
@@ -259,8 +297,10 @@ export const tauriApi = {
   searchMemories: (query: { query: string; memory_types: string[]; limit: number; min_relevance: number }, vaultRoot: string) =>
     invoke<Array<{ id: string; memory_type: string; title: string; preview: string; relevance: number; created_at: string }>>('search_memories', { query, vault_root: vaultRoot }),
 
-  // Accessibility
+  // Accessibility (vision/OCR via local model)
   getAccessibilityStatus: () => invoke<AccessibilityStatus>('get_accessibility_status'),
+  performOcr: (imagePath: string) => invoke<OcrResult>('perform_ocr', { image_path: imagePath }),
+  describeImage: (imagePath: string) => invoke<BlindViewResult>('describe_image', { image_path: imagePath }),
 
   // Security
   emergencyLock: (vaultRoot: string) => invoke<{ success: boolean; keys_cleared: boolean; vault_locked: boolean; timestamp: string }>('emergency_lock', { vault_root: vaultRoot }),
@@ -271,6 +311,17 @@ export const tauriApi = {
   // Vault state (D7 additions)
   vaultIsUnlocked: () => invoke<boolean>('vault_is_unlocked'),
   vaultReadRecord: (recordId: string) => invoke<string>('vault_read_record', { record_id: recordId }),
+  vaultWriteRecord: (params: {
+    recordType: string;
+    contentBase64: string;
+    privacyLevel?: string;
+    parentRecordId?: string;
+  }) => invoke<string>('vault_write_record', {
+    record_type: params.recordType,
+    content_base64: params.contentBase64,
+    privacy_level: params.privacyLevel,
+    parent_record_id: params.parentRecordId,
+  }),
 
   // Agent loop (D2)
   agentChat: (message: string, conversationHistory: ConversationTurn[]) =>
