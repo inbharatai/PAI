@@ -1,6 +1,12 @@
 // UnoOne Power — Desktop Security Hardening
 // Signed manifests, SHA-256 verification, crash recovery, emergency lock
+//
+// D8: Manifest entries are now HMAC-SHA-256 signed using a persistent key
+// stored in VAULT/config/manifest.key. The manifest itself carries a top-level
+// HMAC signature over all entry data. Empty hashes are no longer accepted
+// as valid — every file must have a computed SHA-256.
 
+use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::{Sha256, Digest};
 use std::path::PathBuf;
@@ -10,6 +16,10 @@ use std::path::PathBuf;
 pub struct ManifestEntry {
     pub path: String,
     pub sha256: String,
+    /// D8: HMAC-SHA-256 of (path + sha256 + size_bytes) using the manifest signing key.
+    /// Prevents tampering with entry fields without knowledge of the key.
+    #[serde(default)]
+    pub entry_hmac: String,
     pub size_bytes: u64,
     pub created_at: String,
     pub modified_at: String,
@@ -23,7 +33,12 @@ pub struct VaultManifest {
     pub created_at: String,
     pub entries: Vec<ManifestEntry>,
     pub total_entries: u32,
+    /// SHA-256 of the serialized entries (integrity check)
     pub manifest_sha256: String,
+    /// D8: HMAC-SHA-256 signature over the manifest_sha256 using the
+    /// persistent signing key. Prevents manifest tampering.
+    #[serde(default)]
+    pub manifest_hmac: String,
 }
 
 /// Crash recovery state
@@ -59,6 +74,9 @@ pub struct EmergencyLockResult {
 pub struct SecurityVerificationResult {
     pub vault_id: String,
     pub manifest_valid: bool,
+    /// D8: Whether the HMAC signature on the manifest itself was verified
+    #[serde(default)]
+    pub hmac_valid: bool,
     pub entries_verified: u32,
     pub entries_failed: u32,
     pub total_entries: u32,
@@ -92,17 +110,95 @@ impl SecurityManager {
         Ok(self.compute_sha256(&data))
     }
 
-    /// Generate manifest for all vault files
+    /// D8: Compute HMAC-SHA-256 using the manifest signing key.
+    fn compute_hmac(&self, data: &[u8], key: &[u8]) -> String {
+        type HmacSha256 = Hmac<Sha256>;
+
+        let mut mac = <HmacSha256 as Mac>::new_from_slice(key)
+            .expect("HMAC key length is valid");
+        mac.update(data);
+        let result = mac.finalize();
+        let code_bytes = result.into_bytes();
+        format!("{:x}", code_bytes)
+    }
+
+    /// D8: Get or create the persistent HMAC signing key.
+    /// The key is stored at VAULT/config/manifest.key as hex-encoded bytes.
+    /// If the file doesn't exist, a random 32-byte key is derived from the
+    /// vault ID and stored for subsequent verification.
+    fn get_signing_key(&self) -> Result<[u8; 32], String> {
+        let key_path = PathBuf::from(&self.vault_root)
+            .join("VAULT")
+            .join("config")
+            .join("manifest.key");
+
+        // Create config directory if it doesn't exist
+        if let Some(parent) = key_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create config dir: {}", e))?;
+        }
+
+        if key_path.exists() {
+            // Load existing key
+            let hex_key = std::fs::read_to_string(&key_path)
+                .map_err(|e| format!("Failed to read manifest signing key: {}", e))?;
+            let hex_key = hex_key.trim();
+
+            // Decode hex to bytes
+            let key_bytes = hex::decode(hex_key)
+                .map_err(|e| format!("Failed to decode manifest signing key: {}", e))?;
+
+            if key_bytes.len() != 32 {
+                return Err(format!("Manifest signing key must be 32 bytes, got {}", key_bytes.len()));
+            }
+
+            let mut key = [0u8; 32];
+            key.copy_from_slice(&key_bytes);
+            Ok(key)
+        } else {
+            // Generate a new 32-byte key derived from vault ID + timestamp
+            let vault_id = self.read_vault_id().unwrap_or_default();
+            let seed = format!("{}:{}", vault_id, chrono::Utc::now().to_rfc3339());
+            let hash = Sha256::digest(seed.as_bytes());
+            let mut key = [0u8; 32];
+            key.copy_from_slice(&hash);
+
+            // Save the key as hex
+            let hex_key = hex::encode(key);
+            std::fs::write(&key_path, hex_key)
+                .map_err(|e| format!("Failed to write manifest signing key: {}", e))?;
+
+            Ok(key)
+        }
+    }
+
+    /// Generate manifest for all vault files with HMAC signatures.
+    /// D8: This is the primary manifest generation method — it signs each entry
+    /// and the manifest itself with HMAC-SHA-256.
     pub fn generate_manifest(&self) -> Result<VaultManifest, String> {
         let vault_path = PathBuf::from(&self.vault_root).join("VAULT");
         let mut entries = Vec::new();
 
         self.scan_directory(&vault_path, &mut entries)?;
 
-        // Compute manifest hash from the entries data
+        // D8: Get the signing key and compute HMAC for each entry
+        let signing_key = self.get_signing_key()?;
+
+        // Sign each entry: HMAC(path + ":" + sha256 + ":" + size_bytes)
+        for entry in entries.iter_mut() {
+            if !entry.sha256.is_empty() {
+                let entry_data = format!("{}:{}:{}", entry.path, entry.sha256, entry.size_bytes);
+                entry.entry_hmac = self.compute_hmac(entry_data.as_bytes(), &signing_key);
+            }
+        }
+
+        // Compute manifest hash from the signed entries data
         let manifest_data = serde_json::to_string(&entries)
             .map_err(|e| format!("Failed to serialize manifest: {}", e))?;
         let sha256 = self.compute_sha256(manifest_data.as_bytes());
+
+        // D8: Compute HMAC signature over the manifest hash
+        let manifest_hmac = self.compute_hmac(sha256.as_bytes(), &signing_key);
 
         Ok(VaultManifest {
             vault_id: self.read_vault_id()?,
@@ -110,14 +206,38 @@ impl SecurityManager {
             total_entries: entries.len() as u32,
             entries,
             manifest_sha256: sha256,
+            manifest_hmac,
         })
     }
 
-    /// Verify all vault files against manifest
+    /// Verify all vault files against manifest, including HMAC signatures.
+    /// D8: Verifies both the top-level manifest HMAC and per-entry HMACs.
+    /// Empty hashes are NO LONGER accepted — every file must have a real hash.
     pub fn verify_manifest(&self, manifest: &VaultManifest) -> Result<SecurityVerificationResult, String> {
         let mut verified = 0u32;
         let mut failed = 0u32;
         let mut errors = Vec::new();
+
+        // D8: Verify the manifest HMAC signature first
+        let signing_key = self.get_signing_key()?;
+        let expected_hmac = self.compute_hmac(manifest.manifest_sha256.as_bytes(), &signing_key);
+
+        let hmac_valid = expected_hmac == manifest.manifest_hmac;
+        if !hmac_valid {
+            errors.push("Manifest HMAC signature verification failed — manifest may be tampered".to_string());
+        }
+
+        // Verify manifest SHA-256 integrity
+        let entries_json = serde_json::to_string(&manifest.entries)
+            .map_err(|e| format!("Failed to serialize manifest entries: {}", e))?;
+        let computed_manifest_hash = self.compute_sha256(entries_json.as_bytes());
+        if computed_manifest_hash != manifest.manifest_sha256 {
+            failed += 1;
+            errors.push(format!(
+                "Manifest SHA-256 mismatch: expected {}, computed {}",
+                manifest.manifest_sha256, computed_manifest_hash
+            ));
+        }
 
         for entry in &manifest.entries {
             let file_path = PathBuf::from(&entry.path);
@@ -127,10 +247,32 @@ impl SecurityManager {
                 continue;
             }
 
+            // D8: Empty hash is NO LONGER accepted — tampering suspected
+            if entry.sha256.is_empty() {
+                failed += 1;
+                errors.push(format!(
+                    "Entry '{}' has empty SHA-256 hash — tampering suspected",
+                    entry.path
+                ));
+                continue;
+            }
+
+            // D8: Verify entry HMAC — path + sha256 + size_bytes must match
+            let entry_data = format!("{}:{}:{}", entry.path, entry.sha256, entry.size_bytes);
+            let expected_entry_hmac = self.compute_hmac(entry_data.as_bytes(), &signing_key);
+            if entry.entry_hmac != expected_entry_hmac {
+                failed += 1;
+                errors.push(format!(
+                    "Entry HMAC mismatch for {}: stored={}, computed={}",
+                    entry.path, entry.entry_hmac, expected_entry_hmac
+                ));
+                continue;
+            }
+
             // Compute real SHA-256 and compare
             match self.compute_file_sha256(&file_path) {
                 Ok(computed_hash) => {
-                    if computed_hash == entry.sha256 || entry.sha256.is_empty() {
+                    if computed_hash == entry.sha256 {
                         verified += 1;
                     } else {
                         failed += 1;
@@ -149,7 +291,8 @@ impl SecurityManager {
 
         Ok(SecurityVerificationResult {
             vault_id: manifest.vault_id.clone(),
-            manifest_valid: failed == 0,
+            manifest_valid: failed == 0 && hmac_valid,
+            hmac_valid,
             entries_verified: verified,
             entries_failed: failed,
             total_entries: manifest.total_entries,
@@ -257,6 +400,7 @@ impl SecurityManager {
                     entries.push(ManifestEntry {
                         path: path.to_string_lossy().to_string(),
                         sha256,
+                        entry_hmac: String::new(), // Filled in by generate_manifest after signing
                         size_bytes: metadata.len(),
                         created_at: created,
                         modified_at: modified,

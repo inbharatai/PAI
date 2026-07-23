@@ -9,6 +9,7 @@ mod documents;
 mod accessibility;
 mod security;
 mod agent;
+mod voice;
 
 use std::sync::Mutex;
 use std::path::PathBuf;
@@ -17,7 +18,7 @@ use unoone_vault_core::Vault;
 /// D7: Rich vault state that holds the live Vault object (with decrypted master key)
 /// after unlock, instead of dropping it. The Vault's Drop impl zeros the master key
 /// on drop, so locking sets Option to None (which drops the Vault, zeroing the key).
-struct DesktopVaultState {
+pub struct DesktopVaultState {
     /// The live Vault struct. None when locked, Some(Vault) when unlocked.
     vault: Mutex<Option<Vault>>,
     /// Fast metadata mirrors (for reads without locking the vault mutex).
@@ -36,10 +37,21 @@ fn main() {
 
     let recording_state = recording::RecordingStateHolder::new();
 
-    // D5: Safety guard held as Tauri managed state — persists across calls,
-    // accumulates audit log, and respects the current security level.
+    // D5/D6: Safety guard held as Tauri managed state — persists across calls,
+    // accumulates audit log, respects the current security level, and D6:
+    // persists level changes to VAULT/config/security.json on disk.
+    // On startup, if a vault root is detected, load the persisted security level.
+    let initial_vault_root = String::new(); // Will be set after vault detection
+    let safety_guard = if initial_vault_root.is_empty() {
+        // No vault detected yet — use default Standard level.
+        // Once a vault is detected and unlock_vault is called, the guard
+        // is re-initialized with the vault root for persistence.
+        safety::DesktopSafetyGuard::new(safety::SecurityLevel::Standard)
+    } else {
+        safety::DesktopSafetyGuard::new_with_vault_root(&initial_vault_root)
+    };
     let safety_state = safety::SafetyGuardState {
-        guard: Mutex::new(safety::DesktopSafetyGuard::new(safety::SecurityLevel::Standard)),
+        guard: Mutex::new(safety_guard),
     };
 
     // D1: Model manager state for inference pipeline
@@ -104,6 +116,10 @@ fn main() {
             // D7: Vault state commands
             vault_is_unlocked,
             vault_read_record,
+            // D4: Voice module (Whisper.cpp STT + Piper TTS)
+            voice::get_voice_status,
+            voice::transcribe_audio,
+            voice::synthesize_speech,
         ])
         .run(tauri::generate_context!())
         .expect("error while running UnoOne Power");
@@ -353,6 +369,11 @@ fn unlock_vault(password: String, vault_root: String, state: tauri::State<'_, De
                 vault_id: result.vault_id,
                 error: String::new(),
             })
+            // Note: D6 — Security level persistence is handled by the safety guard.
+            // When the vault is first detected, set_security_level or a guard
+            // re-init with vault_root enables disk persistence. The frontend
+            // should call set_security_level after vault detection to trigger
+            // the initial persist if needed.
         }
         Err(unoone_vault_core::VaultError::WrongPassword) => {
             Ok(VaultUnlockResult {

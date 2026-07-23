@@ -1,10 +1,12 @@
 // UnoOne Power — Desktop ReAct Agent Loop
 // D2: Implements the agentic reasoning loop on the backend.
+// D3: Tool implementations now read from the live vault state instead of stubs.
 // Model → parse tool calls → safety guard → execute tools → observe → loop.
-// The frontend sends a user message and receives structured AgentResult with steps.
 
+use crate::documents;
 use crate::llama::{ConversationTurn, InferenceRequest, InferenceResponse, ModelManagerState, ToolDefinition};
 use crate::safety::{DesktopSafetyGuard, SafetyGuardState, SecurityLevel, ToolAction};
+use crate::security;
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 
@@ -29,6 +31,138 @@ pub struct AgentResult {
     pub iterations: u32,
 }
 
+/// D3: Tool implementations that use real vault state.
+/// Each tool reads from the live DesktopVaultState or document processor.
+struct ToolExecutor<'a> {
+    vault_root: &'a str,
+}
+
+impl<'a> ToolExecutor<'a> {
+    fn new(vault_root: &'a str) -> Self {
+        Self { vault_root }
+    }
+
+    /// Search notes and documents in the vault
+    fn search_notes(&self, query: &str, limit: Option<u64>) -> String {
+        let search_query = documents::MemorySearchQuery {
+            query: query.to_string(),
+            memory_types: vec!["note".to_string(), "document".to_string(), "memory".to_string()],
+            limit: limit.unwrap_or(10) as u32,
+            min_relevance: 0.1,
+        };
+
+        let results = documents::search_memories(search_query, self.vault_root.to_string());
+
+        if results.is_empty() {
+            format!("No results found for '{}'. The vault may be empty or no documents match.", query)
+        } else {
+            let mut output = format!("Found {} result(s) for '{}':\n", results.len(), query);
+            for result in &results {
+                output.push_str(&format!(
+                    "- [{}] {} (relevance: {:.0}%)\n  {}\n",
+                    result.memory_type,
+                    result.title,
+                    result.relevance * 100.0,
+                    result.preview
+                ));
+            }
+            output
+        }
+    }
+
+    /// List all documents in the vault
+    fn list_documents(&self) -> String {
+        let docs = documents::list_documents(self.vault_root.to_string());
+
+        if docs.is_empty() {
+            "No documents found in the vault. Add documents to the VAULT/documents directory.".to_string()
+        } else {
+            let mut output = format!("Found {} document(s) in the vault:\n", docs.len());
+            for doc in &docs {
+                let type_icon = match doc.document_type {
+                    documents::DocumentType::Txt => "📄",
+                    documents::DocumentType::Markdown => "📝",
+                    documents::DocumentType::Pdf => "📕",
+                    documents::DocumentType::Docx => "📘",
+                    _ => "📎",
+                };
+                output.push_str(&format!(
+                    "{} {} [{}] {} bytes\n",
+                    type_icon,
+                    doc.title,
+                    match doc.document_type {
+                        documents::DocumentType::Txt => "TXT",
+                        documents::DocumentType::Markdown => "MD",
+                        documents::DocumentType::Pdf => "PDF",
+                        documents::DocumentType::Docx => "DOCX",
+                        documents::DocumentType::Csv => "CSV",
+                        documents::DocumentType::Xlsx => "XLSX",
+                        documents::DocumentType::Pptx => "PPTX",
+                        documents::DocumentType::Image => "IMG",
+                        documents::DocumentType::Audio => "AUDIO",
+                        documents::DocumentType::WebPage => "WEB",
+                    },
+                    doc.file_size_bytes,
+                ));
+                if let Some(wc) = doc.word_count {
+                    output.push_str(&format!("   {} words\n", wc));
+                }
+            }
+            output
+        }
+    }
+
+    /// Read a specific document from the vault
+    fn read_document(&self, document_id: &str) -> String {
+        let result = documents::process_document(document_id.to_string(), self.vault_root.to_string());
+
+        if result.success {
+            let text = result.extracted_text.unwrap_or_default();
+            // Truncate very long documents for the agent context window
+            let truncated = if text.len() > 4000 {
+                format!("{}...\n\n[Document truncated — {} total characters]", &text[..4000], text.len())
+            } else {
+                text
+            };
+            truncated
+        } else {
+            let error = result.error.unwrap_or_default();
+            if error.contains("not yet supported") {
+                format!("Document '{}' is in a binary format. Only text files (.txt, .md) are currently supported for reading. Error: {}", document_id, error)
+            } else {
+                format!("Could not read document '{}': {}", document_id, error)
+            }
+        }
+    }
+
+    /// Verify vault manifest integrity
+    fn verify_vault(&self) -> String {
+        match security::verify_manifest(self.vault_root.to_string()) {
+            Ok(result) => {
+                if result.manifest_valid && result.hmac_valid {
+                    format!(
+                        "✅ Vault integrity verified: {} files OK, HMAC signature valid. Total: {} files.",
+                        result.entries_verified, result.total_entries
+                    )
+                } else {
+                    let mut output = format!(
+                        "⚠️ Vault integrity check failed: {} of {} files failed.",
+                        result.entries_failed, result.total_entries
+                    );
+                    if !result.hmac_valid {
+                        output.push_str("\n❌ Manifest HMAC signature is INVALID — the vault manifest may have been tampered with.");
+                    }
+                    for err in &result.errors {
+                        output.push_str(&format!("\n  - {}", err));
+                    }
+                    output
+                }
+            }
+            Err(e) => format!("Could not verify vault: {}", e),
+        }
+    }
+}
+
 /// D2: The agent loop state, held as Tauri managed state.
 /// Contains the safety guard for tool review and the max steps limit.
 pub struct AgentLoopState {
@@ -51,13 +185,13 @@ fn get_system_prompt() -> String {
         .to_string()
 }
 
-/// D2: Tool definitions available to the model.
-/// These mirror the tools that have real implementations in the desktop backend.
+/// D3: Tool definitions available to the model.
+/// These mirror the real tool implementations that read from vault state.
 fn get_tool_definitions() -> Vec<ToolDefinition> {
     vec![
         ToolDefinition {
             name: "search_notes".to_string(),
-            description: "Search for notes and documents in the encrypted vault by query string.".to_string(),
+            description: "Search for notes and documents in the encrypted vault by query string. Returns matching documents with previews.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -69,7 +203,7 @@ fn get_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "list_documents".to_string(),
-            description: "List all documents stored in the encrypted vault.".to_string(),
+            description: "List all documents stored in the encrypted vault. Returns document names, types, and sizes.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {}
@@ -77,7 +211,7 @@ fn get_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "read_document".to_string(),
-            description: "Read the contents of a specific document from the vault.".to_string(),
+            description: "Read the contents of a specific document from the vault. Supports text and markdown files.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -86,29 +220,43 @@ fn get_tool_definitions() -> Vec<ToolDefinition> {
                 "required": ["document_id"]
             }),
         },
+        ToolDefinition {
+            name: "verify_vault".to_string(),
+            description: "Verify the integrity of the encrypted vault by checking HMAC signatures and file hashes. Reports any tampering or missing files.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {}
+            }),
+        },
     ]
 }
 
-/// Execute a single tool call after it has been approved by the safety guard.
+/// D3: Execute a single tool call using real vault state.
 /// Returns the tool result as a string.
-async fn execute_tool(tool_name: &str, args: &serde_json::Value) -> String {
+async fn execute_tool(tool_name: &str, args: &serde_json::Value, vault_root: &str) -> String {
+    let executor = ToolExecutor::new(vault_root);
+
     match tool_name {
         "search_notes" => {
             let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
-            format!("Search results for '{}': (vault search implementation pending)", query)
+            let limit = args.get("limit").and_then(|v| v.as_u64());
+            executor.search_notes(query, limit)
         }
         "list_documents" => {
-            "Document listing: (vault must be unlocked first)".to_string()
+            executor.list_documents()
         }
         "read_document" => {
             let doc_id = args.get("document_id").and_then(|v| v.as_str()).unwrap_or("");
-            format!("Document '{}' content: (vault read implementation pending)", doc_id)
+            executor.read_document(doc_id)
+        }
+        "verify_vault" => {
+            executor.verify_vault()
         }
         _ => format!("Unknown tool: {}", tool_name),
     }
 }
 
-/// D2: Run the full ReAct agent loop for a user message.
+/// D2/D3: Run the full ReAct agent loop for a user message.
 ///
 /// The loop:
 /// 1. Send user message + system prompt + tools to the model via llama-server
@@ -122,9 +270,20 @@ pub async fn agent_chat(
     model_state: tauri::State<'_, ModelManagerState>,
     safety_state: tauri::State<'_, SafetyGuardState>,
     agent_state: tauri::State<'_, AgentLoopState>,
+    vault_state: tauri::State<'_, crate::DesktopVaultState>,
 ) -> Result<AgentResult, String> {
     let mut steps = Vec::new();
     let mut history = conversation_history;
+
+    // D3: Get vault root from state for real tool execution
+    let vault_root = {
+        let root = vault_state.vault_root.lock().map_err(|e| format!("State lock error: {}", e))?;
+        root.clone()
+    };
+
+    if vault_root.is_empty() {
+        return Err("No vault is connected. Please connect a vault first.".to_string());
+    }
 
     // Add the user message to history
     history.push(ConversationTurn {
@@ -197,9 +356,9 @@ pub async fn agent_chat(
                         confidence: action.confidence,
                     });
 
-                    // 2c. Execute the approved tool
+                    // 2c. Execute the approved tool using real vault state
                     let args = verdict.modified_parameters.as_ref().unwrap_or(&tc.arguments);
-                    let result = execute_tool(&tc.name, args).await;
+                    let result = execute_tool(&tc.name, args, &vault_root).await;
 
                     steps.push(AgentStep::ToolResult {
                         tool: tc.name.clone(),

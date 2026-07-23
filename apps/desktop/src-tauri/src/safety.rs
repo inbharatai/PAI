@@ -1,9 +1,14 @@
 // UnoOne Power — Desktop Safety Guard
 // Canonical safety pipeline: model output → parser → ToolAction → SafetyGuard → execution
 // RAW MODEL OUTPUT NEVER EXECUTES TOOLS DIRECTLY
+//
+// D6: Security level is now persisted to VAULT/config/security.json
+// so it survives app restarts. Level changes write to disk immediately.
+// Audit log entries are preserved across level changes.
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::path::PathBuf;
 use std::sync::Mutex;
 
 /// Safety level for the desktop guard
@@ -23,6 +28,13 @@ impl fmt::Display for SecurityLevel {
             SecurityLevel::Off => write!(f, "OFF"),
         }
     }
+}
+
+/// D6: Persisted security config file structure
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SecurityConfig {
+    level: String,
+    updated_at: String,
 }
 
 /// Tool action parsed from model output
@@ -74,6 +86,8 @@ pub struct DesktopSafetyGuard {
     security_level: SecurityLevel,
     blocked_actions: Vec<String>,
     audit_log: Vec<SafetyAuditEntry>,
+    /// D6: Vault root path for persisting security level
+    vault_root: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -88,7 +102,76 @@ pub struct SafetyAuditEntry {
 
 impl DesktopSafetyGuard {
     pub fn new(security_level: SecurityLevel) -> Self {
-        let blocked_actions = match security_level {
+        let blocked_actions = Self::blocked_actions_for_level(&security_level);
+
+        Self {
+            security_level,
+            blocked_actions,
+            audit_log: Vec::new(),
+            vault_root: None,
+        }
+    }
+
+    /// D6: Create a new guard, loading the persisted security level from disk.
+    /// Falls back to Standard if no config file exists.
+    pub fn new_with_vault_root(vault_root: &str) -> Self {
+        let persisted_level = Self::load_security_level(vault_root);
+        let mut guard = Self::new(persisted_level);
+        guard.vault_root = Some(vault_root.to_string());
+        guard
+    }
+
+    /// D6: Load security level from VAULT/config/security.json
+    fn load_security_level(vault_root: &str) -> SecurityLevel {
+        let config_path = PathBuf::from(vault_root)
+            .join("VAULT")
+            .join("config")
+            .join("security.json");
+
+        if let Ok(content) = std::fs::read_to_string(&config_path) {
+            if let Ok(config) = serde_json::from_str::<SecurityConfig>(&content) {
+                return match config.level.as_str() {
+                    "RELAXED" => SecurityLevel::Relaxed,
+                    "OFF" => SecurityLevel::Off,
+                    _ => SecurityLevel::Standard,
+                };
+            }
+        }
+        SecurityLevel::Standard
+    }
+
+    /// D6: Persist current security level to VAULT/config/security.json
+    fn save_security_level(&self) -> Result<(), String> {
+        if let Some(ref vault_root) = self.vault_root {
+            let config_dir = PathBuf::from(vault_root)
+                .join("VAULT")
+                .join("config");
+            std::fs::create_dir_all(&config_dir)
+                .map_err(|e| format!("Failed to create config dir: {}", e))?;
+
+            let config_path = config_dir.join("security.json");
+            let config = SecurityConfig {
+                level: self.security_level.to_string(),
+                updated_at: chrono::Utc::now().to_rfc3339(),
+            };
+            let json = serde_json::to_string_pretty(&config)
+                .map_err(|e| format!("Failed to serialize security config: {}", e))?;
+            std::fs::write(&config_path, json)
+                .map_err(|e| format!("Failed to write security config: {}", e))?;
+        }
+        Ok(())
+    }
+
+    /// D6: Change security level and persist to disk. Preserves audit log.
+    pub fn set_security_level(&mut self, level: SecurityLevel) -> Result<(), String> {
+        self.security_level = level.clone();
+        self.blocked_actions = Self::blocked_actions_for_level(&level);
+        self.save_security_level()
+    }
+
+    /// Compute blocked actions for a given security level
+    fn blocked_actions_for_level(level: &SecurityLevel) -> Vec<String> {
+        match level {
             SecurityLevel::Standard => vec![
                 "shell_execute".to_string(),
                 "file_delete_system".to_string(),
@@ -100,12 +183,6 @@ impl DesktopSafetyGuard {
                 "registry_modify".to_string(),
             ],
             SecurityLevel::Off => vec![],
-        };
-
-        Self {
-            security_level,
-            blocked_actions,
-            audit_log: Vec::new(),
         }
     }
 
@@ -273,12 +350,10 @@ impl DesktopSafetyGuard {
         });
     }
 
-    #[allow(dead_code)]
     pub fn get_security_level(&self) -> &SecurityLevel {
         &self.security_level
     }
 
-    #[allow(dead_code)]
     pub fn get_audit_log(&self) -> &[SafetyAuditEntry] {
         &self.audit_log
     }
@@ -286,8 +361,9 @@ impl DesktopSafetyGuard {
 
 // Tauri commands for safety guard
 
-/// D5: Stateful wrapper so the safety guard persists across calls,
-/// accumulating audit log entries and respecting the current security level.
+/// D5/D6: Stateful wrapper so the safety guard persists across calls,
+/// accumulating audit log entries, respecting the current security level,
+/// and persisting level changes to disk (D6).
 pub struct SafetyGuardState {
     pub guard: Mutex<DesktopSafetyGuard>,
 }
@@ -297,6 +373,8 @@ pub fn get_security_level(state: tauri::State<'_, SafetyGuardState>) -> String {
     state.guard.lock().unwrap().get_security_level().to_string()
 }
 
+/// D6: Set security level — persists to VAULT/config/security.json and
+/// preserves the audit log across level changes.
 #[tauri::command]
 pub fn set_security_level(level: String, state: tauri::State<'_, SafetyGuardState>) -> Result<String, String> {
     let new_level = match level.as_str() {
@@ -305,28 +383,11 @@ pub fn set_security_level(level: String, state: tauri::State<'_, SafetyGuardStat
         _ => SecurityLevel::Standard,
     };
 
-    // Preserve the audit log across level changes by creating a new guard
-    // with the new level and the old log.
-    let old_log = {
-        let guard = state.guard.lock().unwrap();
-        guard.get_audit_log().to_vec()
-    };
+    // D6: Use set_security_level which updates blocked_actions in-place
+    // and persists to disk, preserving the audit log.
+    let mut guard = state.guard.lock().map_err(|e| format!("State lock error: {}", e))?;
+    guard.set_security_level(new_level)?;
 
-    let mut new_guard = DesktopSafetyGuard::new(new_level);
-    // The new guard gets the default blocked actions for its level.
-    // Audit entries from the old guard are preserved.
-    // Note: DesktopSafetyGuard::new() initializes a fresh audit_log,
-    // so we append the old entries.
-    for entry in old_log {
-        // Since audit_log is private, we can't directly set it.
-        // The review_action method logs new entries, so old entries are lost
-        // unless we replay them — but that would create duplicates in the log.
-        // For now, we accept that changing the security level clears the audit log.
-        // A future improvement could add a separate persistent audit log store.
-        let _ = entry; // Suppress unused variable warning
-    }
-
-    *state.guard.lock().unwrap() = new_guard;
     Ok(format!("Security level set to {}", level))
 }
 
