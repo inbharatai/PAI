@@ -30,14 +30,14 @@ function App() {
     setCurrentView('chat');
   }, []);
 
-  // Auto-lock on window blur (optional, respects timer setting)
+  // Auto-lock on window blur (5 minutes by default, respects timer setting)
   useEffect(() => {
     if (screen !== 'main') return;
     let timer: number | null = null;
     const handleBlur = () => {
+      // Auto-lock after 5 minutes of window blur
       timer = window.setTimeout(() => {
-        // Auto-lock after 5 minutes of window blur
-        // In production, this would use the autoLockMinutes setting
+        handleLock();
       }, 300000);
     };
     const handleFocus = () => {
@@ -50,7 +50,7 @@ function App() {
       window.removeEventListener('focus', handleFocus);
       if (timer) window.clearTimeout(timer);
     };
-  }, [screen]);
+  }, [screen, handleLock]);
 
   if (screen === 'unlock') {
     return <UnlockScreen onUnlock={handleUnlock} />;

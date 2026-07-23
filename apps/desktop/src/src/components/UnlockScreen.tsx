@@ -71,7 +71,7 @@ export function UnlockScreen({ onUnlock }: UnlockScreenProps) {
     setLoading(true);
     setError('');
     try {
-      const result = await tauriApi.setupVault(password, profileName || null, 'D:\\UNOONE');
+      const result = await tauriApi.setupVault(password, profileName || null, vaultInfo?.vault_root || '');
       if (result.success) {
         setRecoveryKey(result.recovery_key);
         setSetupStep(2);

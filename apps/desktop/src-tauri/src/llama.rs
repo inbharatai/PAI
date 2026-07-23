@@ -122,7 +122,6 @@ pub struct ModelInfo {
 }
 
 /// Model manager state
-#[allow(dead_code)]
 pub struct ModelManager {
     config: Mutex<Option<ModelConfig>>,
     status: Mutex<ModelStatus>,
@@ -164,7 +163,6 @@ impl ModelManager {
         backends
     }
 
-    #[allow(dead_code)]
     fn check_cuda(&self) -> bool {
         // Check for CUDA by trying to find nvcuda.dll (Windows) or libcuda.so (Linux)
         if cfg!(target_os = "windows") {
@@ -178,13 +176,11 @@ impl ModelManager {
         }
     }
 
-    #[allow(dead_code)]
     fn check_metal(&self) -> bool {
         // Metal is always available on macOS
         cfg!(target_os = "macos")
     }
 
-    #[allow(dead_code)]
     fn check_vulkan(&self) -> bool {
         // Check for Vulkan runtime
         if cfg!(target_os = "windows") {

@@ -12,8 +12,12 @@ export function ModelManager() {
   useEffect(() => {
     async function load() {
       try {
+        // Detect vault root from USB pendrive, not hardcoded path
+        const vaultInfo = await tauriApi.detectVault();
+        const vaultRoot = vaultInfo.detected ? vaultInfo.vault_root : '';
+
         const [modelList, backends, status, modelConfig] = await Promise.all([
-          tauriApi.listModels('D:\\UNOONE'),
+          tauriApi.listModels(vaultRoot),
           tauriApi.detectAcceleration(),
           tauriApi.getModelStatus(),
           tauriApi.getModelConfig(),

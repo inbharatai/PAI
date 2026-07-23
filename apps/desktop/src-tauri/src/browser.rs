@@ -74,17 +74,6 @@ pub struct BrowserActionResult {
     pub screenshot_path: Option<String>,
 }
 
-/// Page information
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
-pub struct PageInfo {
-    pub url: String,
-    pub title: String,
-    pub status_code: u16,
-    pub content_type: Option<String>,
-    pub load_time_ms: u64,
-}
-
 // Tauri commands — all return honest "not available" until Playwright is integrated
 
 #[tauri::command]

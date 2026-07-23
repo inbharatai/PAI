@@ -4,8 +4,8 @@
 // Model → parse tool calls → safety guard → execute tools → observe → loop.
 
 use crate::documents;
-use crate::llama::{ConversationTurn, InferenceRequest, InferenceResponse, ModelManagerState, ToolDefinition};
-use crate::safety::{DesktopSafetyGuard, SafetyGuardState, SecurityLevel, ToolAction};
+use crate::llama::{ConversationTurn, InferenceRequest, ModelManagerState, ToolDefinition};
+use crate::safety::{SafetyGuardState, ToolAction};
 use crate::security;
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;

@@ -157,6 +157,39 @@ export interface AccessibilityStatus {
   screen_reader_name: string;
 }
 
+export interface AgentStep {
+  type: 'Thinking' | 'ToolCall' | 'ToolResult' | 'SafetyBlock' | 'FinalResponse';
+  tool?: string;
+  args?: Record<string, unknown>;
+  result?: string;
+  reason?: string;
+  text?: string;
+  confidence?: number;
+  approved?: boolean;
+}
+
+export interface AgentResult {
+  final_text: string;
+  steps: AgentStep[];
+  iterations: number;
+}
+
+export interface SecurityVerificationResult {
+  vault_id: string;
+  manifest_valid: boolean;
+  hmac_valid: boolean;
+  entries_verified: number;
+  entries_failed: number;
+  total_entries: number;
+  errors: string[];
+}
+
+export interface VoiceStatus {
+  stt: string;
+  tts: string;
+  language: string;
+}
+
 // Tauri invoke — works in Tauri runtime only
 async function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   const { invoke: tauriInvoke } = await import('@tauri-apps/api/core');
@@ -205,4 +238,23 @@ export const tauriApi = {
   // Security
   emergencyLock: (vaultRoot: string) => invoke<{ success: boolean; keys_cleared: boolean; vault_locked: boolean; timestamp: string }>('emergency_lock', { vault_root: vaultRoot }),
   generateManifest: (vaultRoot: string) => invoke<VaultInfo & { entries: number; manifest_sha256: string }>('generate_manifest', { vault_root: vaultRoot }),
+  verifyManifest: (vaultRoot: string) => invoke<SecurityVerificationResult>('verify_manifest', { vault_root: vaultRoot }),
+  recoverFromCrash: (vaultRoot: string) => invoke<{ state: string; recovered_files: number; rolled_back_files: number; errors: string[] }>('recover_from_crash', { vault_root: vaultRoot }),
+
+  // Vault state (D7 additions)
+  vaultIsUnlocked: () => invoke<boolean>('vault_is_unlocked'),
+  vaultReadRecord: (recordId: string) => invoke<string>('vault_read_record', { record_id: recordId }),
+
+  // Agent loop (D2)
+  agentChat: (message: string, conversationHistory: ConversationTurn[]) =>
+    invoke<AgentResult>('agent_chat', { message, conversation_history: conversationHistory }),
+  checkModelHealth: () => invoke<Record<string, unknown>>('check_model_health'),
+  sendChatCompletion: (request: InferenceRequest) => invoke<InferenceResponse>('send_chat_completion', { request }),
+
+  // Voice module (D4)
+  getVoiceStatus: (vaultRoot: string) => invoke<VoiceStatus>('get_voice_status', { vault_root: vaultRoot }),
+  transcribeAudio: (audioPath: string, vaultRoot: string) =>
+    invoke<{ text: string; language: string; confidence: number; status: string }>('transcribe_audio', { audio_path: audioPath, vault_root: vaultRoot }),
+  synthesizeSpeech: (text: string, vaultRoot: string) =>
+    invoke<{ audio_path: string | null; duration_seconds: number | null; sample_rate: number; status: string; error: string | null }>('synthesize_speech', { text, vault_root: vaultRoot }),
 };

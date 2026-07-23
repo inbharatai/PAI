@@ -20,12 +20,16 @@ export function MemoryExplorer() {
     setLoading(true);
     setError('');
     try {
+      // Detect vault root from USB pendrive, not hardcoded path
+      const vaultInfo = await tauriApi.detectVault();
+      const vaultRoot = vaultInfo.detected ? vaultInfo.vault_root : '';
+
       const result = await tauriApi.searchMemories({
         query: searchQuery || '*',
         memory_types: [],
         limit: 50,
         min_relevance: 0.0,
-      }, 'D:\\UNOONE');
+      }, vaultRoot);
       setMemories(result.map((m: { id: string; memory_type: string; title: string; preview: string; created_at: string }) => ({
         id: m.id,
         type: m.memory_type.toLowerCase(),

@@ -1,16 +1,37 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { tauriApi } from '../lib/tauri';
 
 export function SettingsView() {
   const [settings, setSettings] = useState({
     language: 'en',
     securityLevel: 'STANDARD',
     theme: 'dark',
-    modelPath: 'D:\\UNOONE\\MODELS\\gemma4-12b-q4',
+    modelPath: '',
     maxTokens: 4096,
     temperature: 0.7,
     autoLockMinutes: 5,
     usbAutoDetect: true,
   });
+
+  // Load security level and vault info from backend on mount
+  useEffect(() => {
+    async function loadSettings() {
+      try {
+        const [secLevel, vaultInfo] = await Promise.all([
+          tauriApi.getSecurityLevel(),
+          tauriApi.detectVault(),
+        ]);
+        setSettings(prev => ({
+          ...prev,
+          securityLevel: secLevel,
+          modelPath: vaultInfo.detected ? vaultInfo.vault_root + '\\MODELS\\gemma4-12b-q4' : prev.modelPath,
+        }));
+      } catch {
+        // Settings will use defaults if backend is unavailable
+      }
+    }
+    loadSettings();
+  }, []);
 
   const handleChange = (key: string, value: string | number | boolean) => {
     setSettings(prev => ({ ...prev, [key]: value }));
